@@ -118,3 +118,81 @@ def test_run_dual_b_sequence_with_bm9():
         assert p.luminance is not None
     for p in ch_b_points:
         assert p.luminance is None
+
+
+class _EventRecordingMock(Keithley2612BMock):
+    """reset/configure/output の呼び出し順序を検証するためのモック拡張。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.events: list = []
+
+    def reset(self) -> None:
+        self.events.append(("reset",))
+        super().reset()
+
+    def configure_source_voltage(self, channel, compliance_current, nplc, auto_range=True):
+        self.events.append(("configure", channel, compliance_current, nplc))
+        super().configure_source_voltage(channel, compliance_current, nplc, auto_range)
+
+    def set_output(self, channel, on) -> None:
+        self.events.append(("output", channel, on))
+        super().set_output(channel, on)
+
+
+def test_run_dual_b_sequence_resets_and_configures_before_output_on():
+    """出力ON前にreset→configure(コンプライアンス/NPLC反映)が行われることを検証。
+
+    過去の不具合: run_dual_b_sequence が reset() も configure_source_voltage() も
+    呼ばずに出力ONしており、ChannelConfig.compliance_current / nplc が
+    一切反映されていなかった(素子破壊リスク)。
+    """
+    ch_a = ChannelConfig(
+        enabled=True, v_min=0.0, v_max=0.1, v_step=0.1, iteration=1,
+        compliance_current=0.005, nplc=2.0,
+    )
+    ch_b = ChannelConfig(
+        enabled=True, v_min=0.0, v_max=0.1, v_step=0.1, iteration=1,
+        compliance_current=0.010, nplc=0.5,
+    )
+    config = DualBConfig(connection="MOCK", use_mock=True, channel_a=ch_a, channel_b=ch_b)
+
+    smu = _EventRecordingMock(connection="MOCK")
+    smu.connect()
+    list(run_dual_b_sequence(smu, config, lambda: False, sleep_fn=lambda x: None))
+
+    # resetが1回呼ばれ、チャンネルごとのコンプライアンス/NPLCが設定されている
+    assert smu.reset_calls == 1
+    assert ("configure", "smua", 0.005, 2.0) in smu.events
+    assert ("configure", "smub", 0.010, 0.5) in smu.events
+
+    # 呼び出し順序: reset → configure(全チャンネル) → 出力ON
+    idx_reset = smu.events.index(("reset",))
+    idx_conf_a = smu.events.index(("configure", "smua", 0.005, 2.0))
+    idx_conf_b = smu.events.index(("configure", "smub", 0.010, 0.5))
+    idx_on_a = smu.events.index(("output", "smua", True))
+    idx_on_b = smu.events.index(("output", "smub", True))
+    assert idx_reset < idx_conf_a < idx_on_a
+    assert idx_reset < idx_conf_b < idx_on_b
+
+    # 終了時は両チャンネルとも出力OFF
+    assert smu.events[-2:] == [("output", "smua", False), ("output", "smub", False)]
+
+
+def test_run_dual_b_sequence_configures_only_enabled_channels():
+    """無効チャンネルにはconfigure/出力ONを行わないことを検証。"""
+    ch_a = ChannelConfig(
+        enabled=True, v_min=0.0, v_max=0.1, v_step=0.1, iteration=1,
+        compliance_current=0.003, nplc=1.0,
+    )
+    ch_b = ChannelConfig(enabled=False)
+    config = DualBConfig(connection="MOCK", use_mock=True, channel_a=ch_a, channel_b=ch_b)
+
+    smu = _EventRecordingMock(connection="MOCK")
+    smu.connect()
+    list(run_dual_b_sequence(smu, config, lambda: False, sleep_fn=lambda x: None))
+
+    assert smu.reset_calls == 1
+    configured_channels = [e[1] for e in smu.events if e[0] == "configure"]
+    assert configured_channels == ["smua"]
+    assert ("output", "smub", True) not in smu.events

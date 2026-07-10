@@ -95,6 +95,7 @@ def run_dual_a_sequence(
     ``OPV_measurement_ver2.py``踏襲で、2chの単純平均ではなくsmubの測定電流
     のみを採用する。
     """
+    smu.reset()
     smu.configure_source_voltage("smua", config.compliance_current, config.nplc)
     smu.configure_source_voltage("smub", config.compliance_current, config.nplc)
     voltage_list = config.build_voltage_list()
@@ -151,6 +152,14 @@ def run_dual_b_sequence(
     va_list = chan_a.build_voltage_list() if chan_a.enabled else np.array([])
     vb_list = chan_b.build_voltage_list() if chan_b.enabled else np.array([])
     n = max(len(va_list), len(vb_list))
+
+    # 他シーケンス(OPV/JVL/モードA)と同様、出力ONの前に必ず機器を初期化し、
+    # チャンネルごとのコンプライアンス電流・NPLCを設定する(素子保護のため必須)。
+    smu.reset()
+    if chan_a.enabled:
+        smu.configure_source_voltage("smua", chan_a.compliance_current, chan_a.nplc)
+    if chan_b.enabled:
+        smu.configure_source_voltage("smub", chan_b.compliance_current, chan_b.nplc)
 
     if chan_a.enabled:
         smu.set_output("smua", True)

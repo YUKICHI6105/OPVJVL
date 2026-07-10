@@ -98,3 +98,57 @@ def test_run_dual_a_sequence_led():
         assert isinstance(p, IVLPoint)
         assert p.luminance is not None
         assert p.current == pytest.approx(0.00123)
+
+
+def test_run_dual_a_sequence_resets_and_configures_before_output_on():
+    """出力ON前にreset→configure(コンプライアンス/NPLC反映)が行われることを検証。"""
+    config = DualAConfig(
+        device_type="keithley2612b",
+        connection="MOCK",
+        use_mock=True,
+        v_min=0.0,
+        v_max=0.1,
+        v_step=0.1,
+        iteration=1,
+        compliance_current=0.007,
+        nplc=2.5,
+        delay_time=0.0,
+    )
+
+    events = []
+    smu = Keithley2612BMock(connection="MOCK")
+    smu.connect()
+
+    original_reset = smu.reset
+    original_configure = smu.configure_source_voltage
+    original_set_output = smu.set_output
+
+    def reset():
+        events.append(("reset",))
+        original_reset()
+
+    def configure(channel, compliance_current, nplc, auto_range=True):
+        events.append(("configure", channel, compliance_current, nplc))
+        original_configure(channel, compliance_current, nplc, auto_range)
+
+    def set_output(channel, on):
+        events.append(("output", channel, on))
+        original_set_output(channel, on)
+
+    smu.reset = reset
+    smu.configure_source_voltage = configure
+    smu.set_output = set_output
+
+    list(run_dual_a_sequence(smu, config, lambda: False, sleep_fn=lambda x: None))
+
+    assert ("reset",) in events
+    assert ("configure", "smua", 0.007, 2.5) in events
+    assert ("configure", "smub", 0.007, 2.5) in events
+
+    idx_reset = events.index(("reset",))
+    idx_conf_a = events.index(("configure", "smua", 0.007, 2.5))
+    idx_conf_b = events.index(("configure", "smub", 0.007, 2.5))
+    idx_on_a = events.index(("output", "smua", True))
+    idx_on_b = events.index(("output", "smub", True))
+    assert idx_reset < idx_conf_a < idx_on_a
+    assert idx_reset < idx_conf_b < idx_on_b
