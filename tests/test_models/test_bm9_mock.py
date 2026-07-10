@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import pytest
-from opvjvl.models.instruments.base import InstrumentError
-from opvjvl.models.instruments.mock.bm9_mock import BM9Mock
+from models.instruments.base import InstrumentError
+from models.instruments.mock.bm9_mock import BM9Mock
 
 
 def test_bm9_mock_basic_flow():

@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import pytest
-from opvjvl.models.instruments.mock.bm9_mock import BM9Mock
-from opvjvl.models.instruments.mock.keithley2612b_mock import Keithley2612BMock
-from opvjvl.models.measurement.config import ChannelConfig, DualBConfig
-from opvjvl.models.measurement.result import ChannelPoint
-from opvjvl.models.measurement.sequences import run_dual_b_sequence
+from models.instruments.mock.bm9_mock import BM9Mock
+from models.instruments.mock.keithley2612b_mock import Keithley2612BMock
+from models.measurement.config import ChannelConfig, DualBConfig
+from models.measurement.result import ChannelPoint
+from models.measurement.sequences import run_dual_b_sequence
 
 
 def test_run_dual_b_sequence_both_enabled():

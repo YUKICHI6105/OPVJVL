@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import inspect
-from opvjvl.models.instruments.base import AbstractSourceMeter, AbstractLuminanceMeter
-from opvjvl.models.instruments.keithley2400 import Keithley2400
-from opvjvl.models.instruments.keithley2612b import Keithley2612B
-from opvjvl.models.instruments.mock.keithley2400_mock import Keithley2400Mock
-from opvjvl.models.instruments.mock.keithley2612b_mock import Keithley2612BMock
-from opvjvl.models.instruments.bm9 import BM9
-from opvjvl.models.instruments.mock.bm9_mock import BM9Mock
+from models.instruments.base import AbstractSourceMeter, AbstractLuminanceMeter
+from models.instruments.keithley2400 import Keithley2400
+from models.instruments.keithley2612b import Keithley2612B
+from models.instruments.mock.keithley2400_mock import Keithley2400Mock
+from models.instruments.mock.keithley2612b_mock import Keithley2612BMock
+from models.instruments.bm9 import BM9
+from models.instruments.mock.bm9_mock import BM9Mock
 
 
 def assert_signatures_match(base_class, impl_class):

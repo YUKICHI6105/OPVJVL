@@ -9,14 +9,23 @@ description = "太陽電池と発光素子の計測プログラム (Keithley 240
 requires-python = ">=3.9"
 dependencies = [
     "numpy",
-    "pandas",
     "pyserial",
     "pyvisa",
     "pyqtgraph",
 ]
+
+[project.scripts]
+opvjvl = "app:main"
+
+# フラットレイアウト(src/直下にapp.py・qtcompat.pyと各パッケージを配置)のため、
+# 単独モジュール(app, qtcompat)は py-modules、パッケージは packages.find で登録する。
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["app", "qtcompat"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]

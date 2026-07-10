@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import pytest
-from opvjvl.qtcompat import QtWidgets
-from opvjvl.viewmodels.dual_channel_viewmodel import DualChannelViewModel
-from opvjvl.views.dual_channel_tab import DualChannelTab
+from qtcompat import QtWidgets
+from viewmodels.dual_channel_viewmodel import DualChannelViewModel
+from views.dual_channel_tab import DualChannelTab
 
 
 def test_dual_channel_viewmodel_init(qtbot):
@@ -12,7 +12,7 @@ def test_dual_channel_viewmodel_init(qtbot):
     tab = DualChannelTab()
     qtbot.addWidget(tab)
 
-    vm = DualChannelViewModel(tab)
+    vm = tab.viewModel
 
     # モードA初期値
     assert tab.dual_a_startButton.isEnabled()
@@ -28,7 +28,7 @@ def test_dual_channel_mode_b_mutual_exclusion(qtbot):
     tab = DualChannelTab()
     qtbot.addWidget(tab)
 
-    vm = DualChannelViewModel(tab)
+    vm = tab.viewModel
 
     # 初期状態 (チャンネルA: 太陽電池, チャンネルB: 太陽電池)
     assert tab.dual_chA_deviceModeCombo.currentText() == "太陽電池"
@@ -53,3 +53,4 @@ def test_dual_channel_mode_b_mutual_exclusion(qtbot):
         if tab.dual_chB_deviceModeCombo.itemText(index) == "発光素子":
             item = model.item(index)
             assert item.isEnabled()
+

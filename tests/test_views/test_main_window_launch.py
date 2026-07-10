@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from opvjvl.views.main_window import MainWindow
+from views.main_window import MainWindow
 
 
 def test_main_window_launch(qtbot):

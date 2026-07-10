@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import pytest
-from opvjvl.models.instruments.base import InstrumentError
-from opvjvl.models.instruments.mock.keithley2612b_mock import Keithley2612BMock
+from models.instruments.base import InstrumentError
+from models.instruments.mock.keithley2612b_mock import Keithley2612BMock
 
 
 def test_keithley2612b_mock_basic_flow():

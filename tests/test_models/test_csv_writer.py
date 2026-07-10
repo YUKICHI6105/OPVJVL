@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 import os
-from opvjvl.models.measurement import csv_writer
-from opvjvl.models.measurement.result import ChannelPoint, IVLPoint, IVPoint
+from models.measurement import csv_writer
+from models.measurement.result import ChannelPoint, IVLPoint, IVPoint
 
 
 def test_filename_helpers():

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import pytest
-from opvjvl.qtcompat import QtWidgets
-from opvjvl.viewmodels.jvl_viewmodel import JVLViewModel
-from opvjvl.views.jvl_tab import JVLTab
+from qtcompat import QtWidgets
+from viewmodels.jvl_viewmodel import JVLViewModel
+from views.jvl_tab import JVLTab
 
 
 def test_jvl_viewmodel_init(qtbot):
@@ -12,27 +12,30 @@ def test_jvl_viewmodel_init(qtbot):
     tab = JVLTab()
     qtbot.addWidget(tab)
 
-    vm = JVLViewModel(tab)
+    vm = tab.viewModel
 
     assert tab.jvl_startButton.isEnabled()
     assert not tab.jvl_stopButton.isEnabled()
 
 
 def test_jvl_viewmodel_luminance_checkbox(qtbot):
-    """輝度計チェックボックスの切り替えに伴い、BM9ポート入力欄が有効・無効化されることを検証。"""
+    """輝度計チェックボックスの切り替えに伴い、Config構築時のuse_luminance/bm9_portが変化することを検証。"""
     tab = JVLTab()
     qtbot.addWidget(tab)
+    tab.apply_device_settings("keithley2400", "COM5", "COM4")
 
-    vm = JVLViewModel(tab)
-
-    # 初期値はTrue (有効)
     assert tab.jvl_useLuminanceCheckBox.isChecked()
-    assert tab.jvl_bm9PortCombo.isEnabled()
+    config = tab._build_config()
+    assert config.use_luminance
+    assert config.bm9_port == "COM4"
 
-    # チェック解除 -> 無効化される
     tab.jvl_useLuminanceCheckBox.setChecked(False)
-    assert not tab.jvl_bm9PortCombo.isEnabled()
+    config = tab._build_config()
+    assert not config.use_luminance
+    assert config.bm9_port is None
 
-    # 再チェック -> 有効化される
     tab.jvl_useLuminanceCheckBox.setChecked(True)
-    assert tab.jvl_bm9PortCombo.isEnabled()
+    config = tab._build_config()
+    assert config.use_luminance
+    assert config.bm9_port == "COM4"
+
