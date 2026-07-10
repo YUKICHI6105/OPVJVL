@@ -28,14 +28,11 @@ class OPVViewModel(QObject):
     error = pyqtSignal(str)
     finished_ok = pyqtSignal(list, str)
 
-    def __init__(self, opv_tab=None, parent=None) -> None:
+    def __init__(self, parent=None) -> None:
+        # MVVMの依存方向を守るため、ViewModelはViewを一切参照しない。
+        # シグナルの結線はView側(OPVTab._bind_viewmodel)の責務とする。
         super().__init__(parent)
-        self.view = opv_tab
         self._worker: Optional[MeasurementWorker] = None
-
-        if opv_tab is not None:
-            opv_tab.viewModel = self
-            opv_tab._bind_viewmodel()
 
     # ------------------------------------------------------------------
     # 機器一覧の再検索

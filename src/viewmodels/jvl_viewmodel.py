@@ -28,14 +28,11 @@ class JVLViewModel(QObject):
     error = pyqtSignal(str)
     finished_ok = pyqtSignal(list, str)
 
-    def __init__(self, jvl_tab=None, parent=None) -> None:
+    def __init__(self, parent=None) -> None:
+        # MVVMの依存方向を守るため、ViewModelはViewを一切参照しない。
+        # シグナルの結線はView側(JVLTab._bind_viewmodel)の責務とする。
         super().__init__(parent)
-        self.view = jvl_tab
         self._worker: Optional[MeasurementWorker] = None
-
-        if jvl_tab is not None:
-            jvl_tab.viewModel = self
-            jvl_tab._bind_viewmodel()
 
     # ------------------------------------------------------------------
     # 機器一覧の再検索

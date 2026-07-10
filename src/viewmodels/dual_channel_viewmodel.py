@@ -42,15 +42,12 @@ class DualChannelViewModel(QObject):
     error_b = pyqtSignal(str)
     finished_ok_b = pyqtSignal(list, str, str)  # points, csv_path_a, csv_path_b
 
-    def __init__(self, dual_channel_tab=None, parent=None) -> None:
+    def __init__(self, parent=None) -> None:
+        # MVVMの依存方向を守るため、ViewModelはViewを一切参照しない。
+        # シグナルの結線はView側(DualChannelTab._bind_viewmodel)の責務とする。
         super().__init__(parent)
-        self.view = dual_channel_tab
         self._worker_a: Optional[MeasurementWorker] = None
         self._worker_b: Optional[DualChannelWorker] = None
-
-        if dual_channel_tab is not None:
-            dual_channel_tab.viewModel = self
-            dual_channel_tab._bind_viewmodel()
 
     # ==================================================================
     # モードA(2ch低ノイズ計測)

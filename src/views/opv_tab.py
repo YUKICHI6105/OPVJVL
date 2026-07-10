@@ -37,20 +37,12 @@ class OPVTab(QtWidgets.QWidget):
         self._use_mock = False
         self._build_ui()
 
-        # ViewModelの保持と結線
-        self.viewModel = viewModel or OPVViewModel(self)
+        # ViewModelの保持と結線(結線はView側の責務。__init__から一度だけ行う)
+        self.viewModel = viewModel or OPVViewModel()
         self._bind_viewmodel()
 
     def _bind_viewmodel(self) -> None:
-        try:
-            self.opv_startButton.clicked.disconnect()
-        except TypeError:
-            pass
-        try:
-            self.opv_stopButton.clicked.disconnect()
-        except TypeError:
-            pass
-
+        """ViewModelとの結線を行う。__init__から一度だけ呼ぶこと(二重結線防止)。"""
         self.opv_startButton.clicked.connect(self._on_start_clicked)
         self.opv_stopButton.clicked.connect(self._on_stop_clicked)
 

@@ -74,28 +74,12 @@ class DualChannelTab(QtWidgets.QWidget):
 
         self._build_ui()
 
-        # ViewModelの保持と結線
-        self.viewModel = viewModel or DualChannelViewModel(self)
+        # ViewModelの保持と結線(結線はView側の責務。__init__から一度だけ行う)
+        self.viewModel = viewModel or DualChannelViewModel()
         self._bind_viewmodel()
 
     def _bind_viewmodel(self) -> None:
-        try:
-            self.dual_a_startButton.clicked.disconnect()
-        except TypeError:
-            pass
-        try:
-            self.dual_a_stopButton.clicked.disconnect()
-        except TypeError:
-            pass
-        try:
-            self.dual_b_startButton.clicked.disconnect()
-        except TypeError:
-            pass
-        try:
-            self.dual_b_stopButton.clicked.disconnect()
-        except TypeError:
-            pass
-
+        """ViewModelとの結線を行う。__init__から一度だけ呼ぶこと(二重結線防止)。"""
         self.dual_a_startButton.clicked.connect(self._on_mode_a_start_clicked)
         self.dual_a_stopButton.clicked.connect(self._on_mode_a_stop_clicked)
         self.dual_b_startButton.clicked.connect(self._on_mode_b_start_clicked)
