@@ -30,7 +30,7 @@ class DualChannelViewModel(QObject):
     log_appended_a = pyqtSignal(str)
     error_appended_a = pyqtSignal(str)
     error_a = pyqtSignal(str)
-    finished_ok_a = pyqtSignal(list, str)
+    finished_ok_a = pyqtSignal(list, str, bool)  # points, csv_path, aborted
 
     # モードB用
     running_changed_b = pyqtSignal(bool)
@@ -40,7 +40,7 @@ class DualChannelViewModel(QObject):
     log_appended_b = pyqtSignal(str)
     error_appended_b = pyqtSignal(str)
     error_b = pyqtSignal(str)
-    finished_ok_b = pyqtSignal(list, str, str)  # points, csv_path_a, csv_path_b
+    finished_ok_b = pyqtSignal(list, str, str, bool)  # points, csv_path_a, csv_path_b, aborted
 
     def __init__(self, parent=None) -> None:
         # MVVMの依存方向を守るため、ViewModelはViewを一切参照しない。
@@ -127,12 +127,16 @@ class DualChannelViewModel(QObject):
     def _on_mode_a_progress(self, current: int, total: int) -> None:
         self.progress_a.emit(current)
 
-    def _on_mode_a_finished_ok(self, points: list, csv_path: str) -> None:
-        message = f"モードA測定完了: {len(points)}点。"
+    def _on_mode_a_finished_ok(self, points: list, csv_path: str, aborted: bool) -> None:
+        # 中断(ユーザーによるstop)と正常完了を明確に区別して表示する
+        if aborted:
+            message = f"モードA測定中断: {len(points)}点で停止しました。"
+        else:
+            message = f"モードA測定完了: {len(points)}点。"
         if csv_path:
             message += f" 保存先: {csv_path}"
         self.log_appended_a.emit(message)
-        self.finished_ok_a.emit(points, csv_path)
+        self.finished_ok_a.emit(points, csv_path, aborted)
         self._reset_mode_a_running_state()
 
     def _on_mode_a_error(self, message: str) -> None:
@@ -259,6 +263,7 @@ class DualChannelViewModel(QObject):
         self,
         points_a: list,
         points_b: list,
+        aborted: bool,
         channel_a: ChannelConfig,
         channel_b: ChannelConfig,
         save_dir: str,
@@ -294,6 +299,8 @@ class DualChannelViewModel(QObject):
             meta={
                 "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
                 "connection": connection,
+                # ユーザー操作による中断で終了した測定かどうか(解析時の判断材料)
+                "aborted": aborted,
                 "channel_a": self._channel_meta(channel_a),
                 "channel_b": self._channel_meta(channel_b),
             },
@@ -339,14 +346,18 @@ class DualChannelViewModel(QObject):
     def _on_mode_b_progress(self, current: int, total: int) -> None:
         self.progress_b.emit(current)
 
-    def _on_mode_b_finished_ok(self, points: list, path_a: str, path_b: str) -> None:
-        message = f"モードB測定完了: 合計{len(points)}点。"
+    def _on_mode_b_finished_ok(self, points: list, path_a: str, path_b: str, aborted: bool) -> None:
+        # 中断(ユーザーによるstop)と正常完了を明確に区別して表示する
+        if aborted:
+            message = f"モードB測定中断: 合計{len(points)}点で停止しました。"
+        else:
+            message = f"モードB測定完了: 合計{len(points)}点。"
         if path_a:
             message += f" chA保存先: {path_a}"
         if path_b:
             message += f" chB保存先: {path_b}"
         self.log_appended_b.emit(message)
-        self.finished_ok_b.emit(points, path_a, path_b)
+        self.finished_ok_b.emit(points, path_a, path_b, aborted)
         self._reset_mode_b_running_state()
 
     def _on_mode_b_error(self, message: str) -> None:

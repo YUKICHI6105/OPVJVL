@@ -26,7 +26,7 @@ class JVLViewModel(QObject):
     log_appended = pyqtSignal(str)
     error_appended = pyqtSignal(str)
     error = pyqtSignal(str)
-    finished_ok = pyqtSignal(list, str)
+    finished_ok = pyqtSignal(list, str, bool)  # points, csv_path, aborted
 
     def __init__(self, parent=None) -> None:
         # MVVMの依存方向を守るため、ViewModelはViewを一切参照しない。
@@ -128,12 +128,16 @@ class JVLViewModel(QObject):
     def _on_progress(self, current: int, total: int) -> None:
         self.progress.emit(current)
 
-    def _on_finished_ok(self, points: list, csv_path: str) -> None:
-        message = f"測定完了: {len(points)}点。"
+    def _on_finished_ok(self, points: list, csv_path: str, aborted: bool) -> None:
+        # 中断(ユーザーによるstop)と正常完了を明確に区別して表示する
+        if aborted:
+            message = f"測定中断: {len(points)}点で停止しました。"
+        else:
+            message = f"測定完了: {len(points)}点。"
         if csv_path:
             message += f" 保存先: {csv_path}"
         self.log_appended.emit(message)
-        self.finished_ok.emit(points, csv_path)
+        self.finished_ok.emit(points, csv_path, aborted)
         self._reset_running_state()
 
     def _on_error(self, message: str) -> None:

@@ -11,3 +11,4 @@ settings.json
 /sample_*_measurement_data.csv
 /*_dualB_meta.json
 /scratchpad*.log
+log/

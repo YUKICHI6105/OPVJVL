@@ -364,7 +364,7 @@ class JVLTab(QtWidgets.QWidget):
     def _show_warning(self, message: str) -> None:
         QtWidgets.QMessageBox.warning(self, "入力エラー", message)
 
-    def _on_finished_ok(self, points: list, csv_path: str) -> None:
+    def _on_finished_ok(self, points: list, csv_path: str, aborted: bool) -> None:
         pass
 
     def _on_browse_save_dir(self) -> None:

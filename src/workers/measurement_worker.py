@@ -15,6 +15,9 @@ from typing import Callable, List, Optional
 
 from models.instruments.base import AbstractLuminanceMeter, AbstractSourceMeter
 from qtcompat import QThread, pyqtSignal
+from utils.logger import get_logger
+
+logger = get_logger("measurement_worker")
 
 
 class MeasurementWorker(QThread):
@@ -24,11 +27,15 @@ class MeasurementWorker(QThread):
     してからイテレータを回し、1点ごとに``point_measured``/``progress``を
     発火する。例外は``InstrumentError``に限らず全て``error``シグナルに
     変換して伝播させ(B-7節)、``finally``節で必ず機器の``close()``を呼ぶ。
+
+    ``finished_ok``の第3引数``aborted``は、``request_stop()``による
+    協調的中断で終了した場合にTrueとなる(正常完了との区別。EQEの
+    ``on_meas_finished``におけるaborted判定に相当)。
     """
 
     point_measured = pyqtSignal(object)
     progress = pyqtSignal(int, int)
-    finished_ok = pyqtSignal(list, str)
+    finished_ok = pyqtSignal(list, str, bool)  # points, csv_path, aborted
     error = pyqtSignal(str)
 
     def __init__(
@@ -57,6 +64,7 @@ class MeasurementWorker(QThread):
 
     def run(self) -> None:
         points: List[object] = []
+        logger.debug1("MeasurementWorker start: total_points=%d", self._total_points)
         try:
             self._smu.connect()
             if self._luminance_meter is not None:
@@ -68,6 +76,7 @@ class MeasurementWorker(QThread):
                 self.point_measured.emit(point)
                 self.progress.emit(len(points), self._total_points)
         except Exception as exc:  # noqa: BLE001 - B-7節: 未捕捉例外でスレッドを落とさない
+            logger.error("MeasurementWorker error: %s", exc)
             self.error.emit(str(exc))
             return
         finally:
@@ -80,9 +89,15 @@ class MeasurementWorker(QThread):
             except Exception as exc:  # noqa: BLE001
                 # CSV保存失敗はメモリ上の測定結果を失わせない(B-7節)。
                 # finished_okは空パスで発火し、別途errorで通知する。
+                logger.error("MeasurementWorker CSV save failed: %s", exc)
                 self.error.emit(f"CSV保存に失敗しました: {exc}")
 
-        self.finished_ok.emit(points, csv_path)
+        aborted = self._abort_requested
+        logger.info(
+            "MeasurementWorker finished: points=%d, aborted=%s, csv=%s",
+            len(points), aborted, csv_path or "(none)",
+        )
+        self.finished_ok.emit(points, csv_path, aborted)
 
     def _close_instruments(self) -> None:
         try:
