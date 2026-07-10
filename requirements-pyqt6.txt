@@ -1,0 +1,7 @@
+# 開発環境用 (Python 3.13 + PyQt6)
+PyQt6
+pyqtgraph
+numpy
+pandas
+pyserial
+pyvisa

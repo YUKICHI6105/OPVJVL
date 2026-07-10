@@ -1,0 +1,7 @@
+# 本番環境用 (Python 3.9 + PyQt5)
+PyQt5
+pyqtgraph
+numpy
+pandas
+pyserial
+pyvisa

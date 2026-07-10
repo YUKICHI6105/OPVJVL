@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opvjvl"
+version = "0.1.0"
+description = "太陽電池と発光素子の計測プログラム (Keithley 2400/2612B, TOPCON BM9)"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyserial",
+    "pyvisa",
+    "pyqtgraph",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

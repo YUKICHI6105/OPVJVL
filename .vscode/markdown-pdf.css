@@ -1,0 +1,46 @@
+/* 見出し直後でページが変わり、見出しだけが孤立するのを防ぐ */
+h1, h2, h3, h4 {
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+/* テーブルの行がページ境界で分断されるのを防ぐ */
+table {
+  page-break-inside: auto;
+}
+tr {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+/* 本文の左右余白を詰めて印刷可能幅を確保する（A4縦だとツリー図の最長行が
+   デフォルト余白では収まらないため） */
+body {
+  padding: 0 10px !important;
+}
+
+/* コードブロック（ツリー図など）がページ境界で分断されるのを防ぐ。
+   印刷時はスクロールできないため、折り返し(word-wrap)によってASCIIツリー図の
+   インデントが崩れる。折り返しを止め、A4縦の印刷可能幅に収まるようフォントを縮小する。
+   ※ font-size/line-height は既定CSSが <code> 要素に直接指定しているため、
+     継承させるだけの pre への指定では上書きできない。pre code を直接指定する。 */
+pre,
+pre:not(.hljs) {
+  page-break-inside: avoid;
+  break-inside: avoid;
+  white-space: pre !important;
+  overflow-wrap: normal !important;
+  word-wrap: normal !important;
+  padding: 6px !important;
+}
+pre code,
+pre:not(.hljs) code {
+  font-size: 8.5px !important;
+  line-height: 1.35 !important;
+}
+
+/* 箇条書き・引用ブロックの分断を防ぐ */
+li, blockquote {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
