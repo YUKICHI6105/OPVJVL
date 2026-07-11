@@ -11,6 +11,7 @@ from __future__ import annotations
 from qtcompat import QAction, QtGui, QtWidgets, enum_value, qt_exec
 from utils import device_settings, persistence, win32_utils
 from utils.logger import get_logger
+from views import theme
 from views.dialogs import DeviceSettingsDialog
 from views.dual_channel_tab import DualChannelTab
 from views.jvl_tab import JVLTab
@@ -123,7 +124,14 @@ class MainWindow(QtWidgets.QMainWindow):
         centralLayout.setContentsMargins(0, 0, 0, 0)
 
         self.sharedSaveGroupBox = self._build_shared_save_group()
-        centralLayout.addWidget(self.sharedSaveGroupBox, 0)
+        # 各タブの設定カラム(views/theme.py の SETTINGS_PANEL_WIDTH)と横幅を揃え、
+        # 右側に空のストレッチを添えることで「左半分の設定カラム内に収まる」よう
+        # 左詰めで配置する(review.md指摘#1: 左半分からはみ出す問題への対応)。
+        sharedSaveRow = QtWidgets.QHBoxLayout()
+        sharedSaveRow.setObjectName("sharedSaveRow")
+        sharedSaveRow.addWidget(self.sharedSaveGroupBox)
+        sharedSaveRow.addStretch(1)
+        centralLayout.addLayout(sharedSaveRow, 0)
 
         self.opv_tab = OPVTab(
             sample_name_edit=self.sharedSampleNameEdit,
@@ -173,11 +181,15 @@ class MainWindow(QtWidgets.QMainWindow):
         1行構成にして高さを最小限に抑え、グラフ表示領域を圧迫しないようにする。
         縦方向のサイズポリシーもMaximumにして、ウィンドウ拡大時に本パネルではなく
         タブ側(グラフ等)に余剰スペースが割り当てられるようにする。
+        横幅は各タブの設定カラム(`theme.SETTINGS_PANEL_WIDTH`)に揃えた
+        最大幅とし、`_build_central_widget`側でストレッチと組み合わせることで
+        左側の設定カラム内に収める(review.md指摘#1)。
         """
         sharedSaveGroupBox = QtWidgets.QGroupBox("共通保存設定", objectName="sharedSaveGroupBox")
         size_policy_fixed = enum_value(QtWidgets.QSizePolicy, "Maximum")
-        size_policy_expanding = enum_value(QtWidgets.QSizePolicy, "Expanding")
-        sharedSaveGroupBox.setSizePolicy(size_policy_expanding, size_policy_fixed)
+        size_policy_preferred = enum_value(QtWidgets.QSizePolicy, "Preferred")
+        sharedSaveGroupBox.setSizePolicy(size_policy_preferred, size_policy_fixed)
+        sharedSaveGroupBox.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
 
         sharedSaveRowLayout = QtWidgets.QHBoxLayout(sharedSaveGroupBox)
         sharedSaveRowLayout.setObjectName("sharedSaveRowLayout")

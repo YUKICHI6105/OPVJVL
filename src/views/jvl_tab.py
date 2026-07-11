@@ -11,6 +11,7 @@ import pyqtgraph as pg
 from qtcompat import Qt, QtWidgets, enum_value
 from models.measurement.config import JVLConfig
 from viewmodels.jvl_viewmodel import JVLViewModel
+from views import theme
 from views.plot_buffer import PlotBuffer, DualAxisPlotBuffer
 from views.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
 
@@ -70,12 +71,21 @@ class JVLTab(QtWidgets.QWidget):
         jvl_splitter.setOrientation(enum_value(Qt, "Horizontal"))
         jvl_rootLayout.addWidget(jvl_splitter)
 
+        jvl_splitter.setChildrenCollapsible(False)
         jvl_splitter.addWidget(self._build_settings_panel())
         jvl_splitter.addWidget(self._build_display_panel())
+        jvl_splitter.setSizes(theme.DISPLAY_PANEL_STRETCH_SIZES)
+        # 設定カラムは伸縮時も横幅を保持し、グラフ側(表示パネル)にのみ
+        # 余剰スペースを割り当てる(設定パネルがグラフにかぶさるのを防ぐ)。
+        # OPVタブと同一の余白設計(views/theme.py の SETTINGS_PANEL_* 定数)に揃える。
+        jvl_splitter.setStretchFactor(0, 0)
+        jvl_splitter.setStretchFactor(1, 1)
 
     def _build_settings_panel(self) -> QtWidgets.QScrollArea:
         jvl_settingsScrollArea = QtWidgets.QScrollArea(objectName="jvl_settingsScrollArea")
         jvl_settingsScrollArea.setWidgetResizable(True)
+        jvl_settingsScrollArea.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
+        jvl_settingsScrollArea.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
 
         jvl_settingsContainer = QtWidgets.QWidget(objectName="jvl_settingsContainer")
         jvl_settingsLayout = QtWidgets.QVBoxLayout(jvl_settingsContainer)

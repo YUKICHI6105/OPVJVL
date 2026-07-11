@@ -10,6 +10,7 @@ import pyqtgraph as pg
 from qtcompat import Qt, QtWidgets, enum_value
 from models.measurement.config import OPVConfig
 from viewmodels.opv_viewmodel import OPVViewModel
+from views import theme
 from views.plot_buffer import PlotBuffer
 from views.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
 
@@ -66,14 +67,20 @@ class OPVTab(QtWidgets.QWidget):
         opv_splitter.setOrientation(enum_value(Qt, "Horizontal"))
         opv_rootLayout.addWidget(opv_splitter)
 
+        opv_splitter.setChildrenCollapsible(False)
         opv_splitter.addWidget(self._build_settings_panel())
         opv_splitter.addWidget(self._build_display_panel())
-        opv_splitter.setSizes([420, 780])
+        opv_splitter.setSizes(theme.DISPLAY_PANEL_STRETCH_SIZES)
+        # 設定カラムは伸縮時も横幅を保持し、グラフ側(表示パネル)にのみ
+        # 余剰スペースを割り当てる(設定パネルがグラフにかぶさるのを防ぐ)。
+        opv_splitter.setStretchFactor(0, 0)
+        opv_splitter.setStretchFactor(1, 1)
 
     def _build_settings_panel(self) -> QtWidgets.QScrollArea:
         opv_settingsScrollArea = QtWidgets.QScrollArea(objectName="opv_settingsScrollArea")
         opv_settingsScrollArea.setWidgetResizable(True)
-        opv_settingsScrollArea.setMinimumWidth(340)
+        opv_settingsScrollArea.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
+        opv_settingsScrollArea.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
 
         opv_settingsContainer = QtWidgets.QWidget(objectName="opv_settingsContainer")
         opv_settingsLayout = QtWidgets.QVBoxLayout(opv_settingsContainer)
