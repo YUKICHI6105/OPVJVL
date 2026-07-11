@@ -14,6 +14,7 @@ from __future__ import annotations
 from qtcompat import QtWidgets, enum_value
 from utils.device_settings import DEFAULT_DEVICE_SETTINGS
 from viewmodels.device_discovery import list_serial_ports, list_visa_resources
+from views import theme
 
 _DEVICE_TYPE_ITEMS = ["Keithley2400", "Keithley2612B(単チャンネル運用)"]
 _CHANNEL_ITEMS = ["smua", "smub"]
@@ -26,6 +27,93 @@ def _make_editable_combo(object_name: str, current_text: str) -> QtWidgets.QComb
         combo.addItem(current_text)
     combo.setCurrentText(current_text)
     return combo
+
+
+class DisplaySettingsDialog(QtWidgets.QDialog):
+    """グラフ描画スタイル(目盛フォント・線幅・シンボルサイズ・グリッド)の設定ダイアログ。
+
+    EQEプロジェクト(``EQE/src/views/dialogs.py`` の ``DisplaySettingsDialog``)から移植。
+    OPVJVLに存在しない項目(凡例フォント・凡例表示等。OPVJVLのプロットは凡例を
+    持たない)は除外し、代わりにグリッド表示の切替を追加した。
+    デフォルト値の唯一の正は ``views.theme.GRAPH_STYLE_DEFAULTS``。
+    """
+
+    def __init__(self, parent=None, current_settings=None):
+        super().__init__(parent)
+        self.setObjectName("DisplaySettingsDialog")
+        self.setWindowTitle("グラフ表示の設定")
+        self.settings = current_settings or {}
+        self._init_ui()
+        self.resize(360, self.sizeHint().height())
+
+    def _init_ui(self) -> None:
+        layout = QtWidgets.QVBoxLayout(self)
+        form_layout = QtWidgets.QFormLayout()
+
+        defaults = theme.GRAPH_STYLE_DEFAULTS
+
+        self.fontSizeSpin = QtWidgets.QSpinBox(objectName="graph_fontSizeSpin")
+        self.fontSizeSpin.setRange(6, 24)
+        self.fontSizeSpin.setValue(
+            int(self.settings.get("graph_font_size", defaults["graph_font_size"]))
+        )
+        form_layout.addRow("軸・目盛フォントサイズ (pt):", self.fontSizeSpin)
+
+        self.lineWidthSpin = QtWidgets.QDoubleSpinBox(objectName="graph_lineWidthSpin")
+        self.lineWidthSpin.setRange(0.5, 10.0)
+        self.lineWidthSpin.setSingleStep(0.5)
+        self.lineWidthSpin.setDecimals(1)
+        self.lineWidthSpin.setValue(
+            float(self.settings.get("graph_line_width", defaults["graph_line_width"]))
+        )
+        form_layout.addRow("プロット線幅 (px):", self.lineWidthSpin)
+
+        self.symbolSizeSpin = QtWidgets.QSpinBox(objectName="graph_symbolSizeSpin")
+        self.symbolSizeSpin.setRange(0, 20)
+        self.symbolSizeSpin.setValue(
+            int(self.settings.get("graph_symbol_size", defaults["graph_symbol_size"]))
+        )
+        form_layout.addRow("プロットシンボルサイズ (px):", self.symbolSizeSpin)
+
+        self.showGridCheckBox = QtWidgets.QCheckBox(
+            "グリッド線を表示する", objectName="graph_showGridCheckBox"
+        )
+        self.showGridCheckBox.setChecked(
+            bool(self.settings.get("graph_show_grid", defaults["graph_show_grid"]))
+        )
+        form_layout.addRow("グリッド表示:", self.showGridCheckBox)
+
+        layout.addLayout(form_layout)
+
+        button_layout = QtWidgets.QHBoxLayout()
+        self.resetButton = QtWidgets.QPushButton("設定を初期化", objectName="graph_resetButton")
+        self.resetButton.clicked.connect(self.reset_to_defaults)
+
+        ok_flag = enum_value(QtWidgets.QDialogButtonBox, "Ok")
+        cancel_flag = enum_value(QtWidgets.QDialogButtonBox, "Cancel")
+        self.buttonBox = QtWidgets.QDialogButtonBox(ok_flag | cancel_flag)
+        self.buttonBox.accepted.connect(self.accept)
+        self.buttonBox.rejected.connect(self.reject)
+
+        button_layout.addWidget(self.resetButton)
+        button_layout.addStretch()
+        button_layout.addWidget(self.buttonBox)
+        layout.addLayout(button_layout)
+
+    def reset_to_defaults(self) -> None:
+        defaults = theme.GRAPH_STYLE_DEFAULTS
+        self.fontSizeSpin.setValue(int(defaults["graph_font_size"]))
+        self.lineWidthSpin.setValue(float(defaults["graph_line_width"]))
+        self.symbolSizeSpin.setValue(int(defaults["graph_symbol_size"]))
+        self.showGridCheckBox.setChecked(bool(defaults["graph_show_grid"]))
+
+    def get_settings(self) -> dict:
+        return {
+            "graph_font_size": self.fontSizeSpin.value(),
+            "graph_line_width": self.lineWidthSpin.value(),
+            "graph_symbol_size": self.symbolSizeSpin.value(),
+            "graph_show_grid": self.showGridCheckBox.isChecked(),
+        }
 
 
 class DeviceSettingsDialog(QtWidgets.QDialog):

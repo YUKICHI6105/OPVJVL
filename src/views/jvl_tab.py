@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import pyqtgraph as pg
 
-from qtcompat import Qt, QtWidgets, enum_value
+from qtcompat import QtWidgets
 from models.measurement.config import JVLConfig
 from viewmodels.jvl_viewmodel import JVLViewModel
-from views import theme
+from views import tab_layout
 from views.plot_buffer import PlotBuffer, DualAxisPlotBuffer
-from views.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
 
 
 class JVLTab(QtWidgets.QWidget):
@@ -64,186 +63,52 @@ class JVLTab(QtWidgets.QWidget):
     # UI構築
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        jvl_rootLayout = QtWidgets.QHBoxLayout(self)
-        jvl_rootLayout.setObjectName("jvl_rootLayout")
+        """共通レイアウトビルダー(views/tab_layout.py)でタブを構築する。
 
-        jvl_splitter = QtWidgets.QSplitter(objectName="jvl_splitter")
-        jvl_splitter.setOrientation(enum_value(Qt, "Horizontal"))
-        jvl_rootLayout.addWidget(jvl_splitter)
-
-        jvl_splitter.setChildrenCollapsible(False)
-        jvl_splitter.addWidget(self._build_settings_panel())
-        jvl_splitter.addWidget(self._build_display_panel())
-        jvl_splitter.setSizes(theme.DISPLAY_PANEL_STRETCH_SIZES)
-        # 設定カラムは伸縮時も横幅を保持し、グラフ側(表示パネル)にのみ
-        # 余剰スペースを割り当てる(設定パネルがグラフにかぶさるのを防ぐ)。
-        # OPVタブと同一の余白設計(views/theme.py の SETTINGS_PANEL_* 定数)に揃える。
-        jvl_splitter.setStretchFactor(0, 0)
-        jvl_splitter.setStretchFactor(1, 1)
-
-    def _build_settings_panel(self) -> QtWidgets.QScrollArea:
-        jvl_settingsScrollArea = QtWidgets.QScrollArea(objectName="jvl_settingsScrollArea")
-        jvl_settingsScrollArea.setWidgetResizable(True)
-        jvl_settingsScrollArea.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
-        jvl_settingsScrollArea.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
-
-        jvl_settingsContainer = QtWidgets.QWidget(objectName="jvl_settingsContainer")
-        jvl_settingsLayout = QtWidgets.QVBoxLayout(jvl_settingsContainer)
-        jvl_settingsLayout.setObjectName("jvl_settingsLayout")
-
-        jvl_settingsLayout.addWidget(self._build_measurement_group())
-        jvl_settingsLayout.addWidget(self._build_save_run_group())
-        jvl_settingsLayout.addStretch()
-
-        jvl_settingsScrollArea.setWidget(jvl_settingsContainer)
-        return jvl_settingsScrollArea
-
-    def _build_measurement_group(self) -> QtWidgets.QGroupBox:
-        """接続設定・電圧掃引・タイミング/コンプライアンス・輝度計設定を1つのGroupBoxに統合。"""
-        jvl_measurementGroupBox = QtWidgets.QGroupBox("測定設定", objectName="jvl_measurementGroupBox")
-        jvl_measurementFormLayout = QtWidgets.QFormLayout(jvl_measurementGroupBox)
-        jvl_measurementFormLayout.setObjectName("jvl_measurementFormLayout")
-
-        # 電圧掃引(Vmin/Vmax/Vstepを1行)
-        self.jvl_vMinSpin = NoScrollDoubleSpinBox(objectName="jvl_vMinSpin")
-        self.jvl_vMinSpin.setRange(-20.0, 20.0)
-        self.jvl_vMinSpin.setDecimals(3)
-        self.jvl_vMinSpin.setSingleStep(0.1)
-        self.jvl_vMinSpin.setValue(-1.0)
-        self.jvl_vMinSpin.setMaximumWidth(80)
-
-        self.jvl_vMaxSpin = NoScrollDoubleSpinBox(objectName="jvl_vMaxSpin")
-        self.jvl_vMaxSpin.setRange(-20.0, 20.0)
-        self.jvl_vMaxSpin.setDecimals(3)
-        self.jvl_vMaxSpin.setSingleStep(0.1)
-        self.jvl_vMaxSpin.setValue(1.9)
-        self.jvl_vMaxSpin.setMaximumWidth(80)
-
-        self.jvl_vStepSpin = NoScrollDoubleSpinBox(objectName="jvl_vStepSpin")
-        self.jvl_vStepSpin.setRange(0.001, 10.0)
-        self.jvl_vStepSpin.setDecimals(3)
-        self.jvl_vStepSpin.setSingleStep(0.01)
-        self.jvl_vStepSpin.setValue(0.1)
-        self.jvl_vStepSpin.setMaximumWidth(80)
-
-        jvl_sweepRow = QtWidgets.QHBoxLayout()
-        jvl_sweepRow.setObjectName("jvl_sweepRow")
-        jvl_sweepRow.addWidget(QtWidgets.QLabel("開始:"))
-        jvl_sweepRow.addWidget(self.jvl_vMinSpin)
-        jvl_sweepRow.addWidget(QtWidgets.QLabel("終了:"))
-        jvl_sweepRow.addWidget(self.jvl_vMaxSpin)
-        jvl_sweepRow.addWidget(QtWidgets.QLabel("ステップ:"))
-        jvl_sweepRow.addWidget(self.jvl_vStepSpin)
-        jvl_measurementFormLayout.addRow("電圧掃引 (V):", jvl_sweepRow)
-
-        # 繰り返し回数 / NPLC(1行に統合)
-        self.jvl_iterationSpin = NoScrollSpinBox(objectName="jvl_iterationSpin")
-        self.jvl_iterationSpin.setRange(1, 1000)
-        self.jvl_iterationSpin.setValue(3)
-        self.jvl_iterationSpin.setMaximumWidth(80)
-
-        self.jvl_nplcSpin = NoScrollDoubleSpinBox(objectName="jvl_nplcSpin")
-        self.jvl_nplcSpin.setRange(0.01, 10.0)
-        self.jvl_nplcSpin.setDecimals(2)
-        self.jvl_nplcSpin.setSingleStep(0.1)
-        self.jvl_nplcSpin.setValue(1.0)
-        self.jvl_nplcSpin.setMaximumWidth(80)
-
-        jvl_iterationNplcRow = QtWidgets.QHBoxLayout()
-        jvl_iterationNplcRow.setObjectName("jvl_iterationNplcRow")
-        jvl_iterationNplcRow.addWidget(QtWidgets.QLabel("繰り返し:"))
-        jvl_iterationNplcRow.addWidget(self.jvl_iterationSpin)
-        jvl_iterationNplcRow.addWidget(QtWidgets.QLabel("NPLC:"))
-        jvl_iterationNplcRow.addWidget(self.jvl_nplcSpin)
-        jvl_measurementFormLayout.addRow(jvl_iterationNplcRow)
-
-        # 遅延 / コンプライアンス(1行に統合)
-        self.jvl_delaySpin = NoScrollDoubleSpinBox(objectName="jvl_delaySpin")
-        self.jvl_delaySpin.setRange(0.0, 60.0)
-        self.jvl_delaySpin.setDecimals(2)
-        self.jvl_delaySpin.setSingleStep(0.1)
-        self.jvl_delaySpin.setValue(1.0)
-        self.jvl_delaySpin.setMaximumWidth(80)
-
-        self.jvl_complianceSpin = NoScrollDoubleSpinBox(objectName="jvl_complianceSpin")
-        self.jvl_complianceSpin.setRange(0.0001, 1.0)
-        self.jvl_complianceSpin.setDecimals(4)
-        self.jvl_complianceSpin.setSingleStep(0.001)
-        self.jvl_complianceSpin.setValue(0.02)
-        self.jvl_complianceSpin.setMaximumWidth(80)
-
-        jvl_delayComplianceRow = QtWidgets.QHBoxLayout()
-        jvl_delayComplianceRow.setObjectName("jvl_delayComplianceRow")
-        jvl_delayComplianceRow.addWidget(QtWidgets.QLabel("遅延[s]:"))
-        jvl_delayComplianceRow.addWidget(self.jvl_delaySpin)
-        jvl_delayComplianceRow.addWidget(QtWidgets.QLabel("コンプライアンス[A]:"))
-        jvl_delayComplianceRow.addWidget(self.jvl_complianceSpin)
-        jvl_measurementFormLayout.addRow(jvl_delayComplianceRow)
-
-        # 輝度計(BM9)設定(測定設定グループ内に統合。BM9ポート自体は「機器設定」
-        # ダイアログへ移動済みのため、輝度計測有無のチェックボックスのみ残す)
+        OPVタブと同一のコードパスを通すことで、レイアウト差の発生を
+        構造的に防ぐ(review.md指摘#3)。JVL固有の輝度計チェックボックスは
+        ``extra_rows`` フックで測定設定グループ末尾へ差し込む。
+        """
+        # JVL固有: 輝度計(BM9)チェックボックス(BM9ポート自体は「機器設定」
+        # ダイアログへ移動済みのため、輝度計測有無のチェックボックスのみ持つ)
         self.jvl_useLuminanceCheckBox = QtWidgets.QCheckBox(
             "BM9で輝度も測定する(OFFで暗IV測定)", objectName="jvl_useLuminanceCheckBox"
         )
         self.jvl_useLuminanceCheckBox.setChecked(True)
-        jvl_measurementFormLayout.addRow("輝度計(BM9):", self.jvl_useLuminanceCheckBox)
 
-        return jvl_measurementGroupBox
+        def _add_luminance_row(form_layout: QtWidgets.QFormLayout) -> None:
+            form_layout.addRow("輝度計(BM9):", self.jvl_useLuminanceCheckBox)
 
-    def _build_save_run_group(self) -> QtWidgets.QGroupBox:
-        """保存設定と実行ボタンを1つのGroupBoxに統合。"""
-        jvl_saveRunGroupBox = QtWidgets.QGroupBox("保存・実行", objectName="jvl_saveRunGroupBox")
-        jvl_saveRunLayout = QtWidgets.QVBoxLayout(jvl_saveRunGroupBox)
-        jvl_saveRunLayout.setObjectName("jvl_saveRunLayout")
+        # 測定設定グループ(JVL固有の初期値のみ指定。行構成はOPVと共通)
+        jvl_measurementGroupBox, measurement_widgets = tab_layout.build_measurement_group(
+            "jvl", v_min_default=-1.0, v_max_default=1.9, v_step_default=0.1,
+            sweep_single_step=0.1, extra_rows=_add_luminance_row,
+        )
+        self.jvl_vMinSpin = measurement_widgets["v_min"]
+        self.jvl_vMaxSpin = measurement_widgets["v_max"]
+        self.jvl_vStepSpin = measurement_widgets["v_step"]
+        self.jvl_iterationSpin = measurement_widgets["iteration"]
+        self.jvl_nplcSpin = measurement_widgets["nplc"]
+        self.jvl_delaySpin = measurement_widgets["delay"]
+        self.jvl_complianceSpin = measurement_widgets["compliance"]
 
-        jvl_saveFormLayout = QtWidgets.QFormLayout()
-        jvl_saveFormLayout.setObjectName("jvl_saveFormLayout")
+        # 保存・実行グループ
+        jvl_saveRunGroupBox, save_run_widgets = tab_layout.build_save_run_group(
+            "jvl",
+            self._external_sample_name_edit,
+            self._external_save_dir_edit,
+            self._on_browse_save_dir,
+        )
+        self.jvl_sampleNameEdit = save_run_widgets["sample_name"]
+        self.jvl_saveDirEdit = save_run_widgets["save_dir"]
+        self.jvl_startButton = save_run_widgets["start"]
+        self.jvl_stopButton = save_run_widgets["stop"]
+        if save_run_widgets["browse"] is not None:
+            self.jvl_browseSaveDirButton = save_run_widgets["browse"]
 
-        if self._external_sample_name_edit is not None:
-            # 共通保存設定パネル(MainWindow側)のウィジェットをそのまま参照する。
-            # タブ内には重複表示しない。
-            self.jvl_sampleNameEdit = self._external_sample_name_edit
-        else:
-            self.jvl_sampleNameEdit = QtWidgets.QLineEdit(objectName="jvl_sampleNameEdit")
-            jvl_saveFormLayout.addRow("サンプル名:", self.jvl_sampleNameEdit)
-
-        if self._external_save_dir_edit is not None:
-            self.jvl_saveDirEdit = self._external_save_dir_edit
-        else:
-            self.jvl_saveDirEdit = QtWidgets.QLineEdit(objectName="jvl_saveDirEdit")
-            self.jvl_browseSaveDirButton = QtWidgets.QPushButton(
-                "参照...", objectName="jvl_browseSaveDirButton"
-            )
-            self.jvl_browseSaveDirButton.clicked.connect(self._on_browse_save_dir)
-
-            jvl_saveDirRow = QtWidgets.QHBoxLayout()
-            jvl_saveDirRow.setObjectName("jvl_saveDirRow")
-            jvl_saveDirRow.addWidget(self.jvl_saveDirEdit)
-            jvl_saveDirRow.addWidget(self.jvl_browseSaveDirButton)
-            jvl_saveFormLayout.addRow("保存先:", jvl_saveDirRow)
-
-        jvl_saveRunLayout.addLayout(jvl_saveFormLayout)
-
-        self.jvl_startButton = QtWidgets.QPushButton("測定開始", objectName="jvl_startButton")
-        self.jvl_stopButton = QtWidgets.QPushButton("中断", objectName="jvl_stopButton")
-        self.jvl_stopButton.setEnabled(False)
-
-        jvl_runRow = QtWidgets.QHBoxLayout()
-        jvl_runRow.setObjectName("jvl_runRow")
-        jvl_runRow.addWidget(self.jvl_startButton)
-        jvl_runRow.addWidget(self.jvl_stopButton)
-        jvl_saveRunLayout.addLayout(jvl_runRow)
-
-        return jvl_saveRunGroupBox
-
-    def _build_display_panel(self) -> QtWidgets.QWidget:
-        jvl_displayPanel = QtWidgets.QWidget(objectName="jvl_displayPanel")
-        jvl_displayLayout = QtWidgets.QVBoxLayout(jvl_displayPanel)
-        jvl_displayLayout.setObjectName("jvl_displayLayout")
-
+        # 表示パネル側のウィジェット(JVLは2ページ構成のプロットタブ)
         self.jvl_progressBar = QtWidgets.QProgressBar(objectName="jvl_progressBar")
         self.jvl_progressBar.setValue(0)
-        jvl_displayLayout.addWidget(self.jvl_progressBar)
 
         self.jvl_plotTabWidget = QtWidgets.QTabWidget(objectName="jvl_plotTabWidget")
 
@@ -262,19 +127,20 @@ class JVLTab(QtWidgets.QWidget):
         self._setup_luminance_axis(self.jvl_ivlPlotWidget)
         self.jvl_plotTabWidget.addTab(self.jvl_ivlPlotWidget, "I-V-L")
 
-        jvl_displayLayout.addWidget(self.jvl_plotTabWidget)
-
-        jvl_logGroupBox = QtWidgets.QGroupBox("ログ", objectName="jvl_logGroupBox")
-        jvl_logLayout = QtWidgets.QVBoxLayout(jvl_logGroupBox)
-        jvl_logLayout.setObjectName("jvl_logLayout")
-
         self.jvl_logTextEdit = QtWidgets.QTextEdit(objectName="jvl_logTextEdit")
-        self.jvl_logTextEdit.setReadOnly(True)
-        jvl_logLayout.addWidget(self.jvl_logTextEdit)
 
-        jvl_displayLayout.addWidget(jvl_logGroupBox)
+        tab_layout.build_split_tab(
+            self,
+            "jvl",
+            settings_groups=[jvl_measurementGroupBox, jvl_saveRunGroupBox],
+            display_widget=self.jvl_plotTabWidget,
+            log_text_edit=self.jvl_logTextEdit,
+            progress_bar=self.jvl_progressBar,
+        )
 
-        return jvl_displayPanel
+    def plot_widgets(self) -> list:
+        """このタブが保有する全プロットウィジェット(グラフ表示設定の適用対象)。"""
+        return [self.jvl_ivPlotWidget, self.jvl_ivlPlotWidget]
 
     def _setup_luminance_axis(self, plot_widget: pg.PlotWidget) -> None:
         """I-V-Lグラフの右軸に輝度用ViewBoxを重ねる(既存main_gui.pyのパターン踏襲)。

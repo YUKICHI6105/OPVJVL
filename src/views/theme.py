@@ -14,6 +14,16 @@ SETTINGS_PANEL_MIN_WIDTH = 340
 SETTINGS_PANEL_MAX_WIDTH = 460
 DISPLAY_PANEL_STRETCH_SIZES = [SETTINGS_PANEL_WIDTH, 780]
 
+# グラフ表示スタイルのデフォルト値(EQEプロジェクトの「表示の設定」ダイアログから移植)。
+# メニューバー「表示 > グラフ表示の設定...」で変更でき、settings.jsonへ永続化される。
+# キー名はEQEの DEFAULT_SETTINGS と揃える(graph_show_gridのみOPVJVL独自)。
+GRAPH_STYLE_DEFAULTS = {
+    "graph_font_size": 9,      # 軸・目盛フォントサイズ (pt)
+    "graph_line_width": 2.0,   # プロット線幅 (px)
+    "graph_symbol_size": 4,    # プロットシンボルサイズ (px)
+    "graph_show_grid": True,   # グリッド表示の有無
+}
+
 STYLE_SHEET = """
 /* === ダークテーマ QSS === */
 QWidget {

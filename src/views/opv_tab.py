@@ -7,12 +7,11 @@ from __future__ import annotations
 
 import pyqtgraph as pg
 
-from qtcompat import Qt, QtWidgets, enum_value
+from qtcompat import QtWidgets
 from models.measurement.config import OPVConfig
 from viewmodels.opv_viewmodel import OPVViewModel
-from views import theme
+from views import tab_layout
 from views.plot_buffer import PlotBuffer
-from views.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
 
 
 class OPVTab(QtWidgets.QWidget):
@@ -60,193 +59,57 @@ class OPVTab(QtWidgets.QWidget):
     # UI構築
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        opv_rootLayout = QtWidgets.QHBoxLayout(self)
-        opv_rootLayout.setObjectName("opv_rootLayout")
+        """共通レイアウトビルダー(views/tab_layout.py)でタブを構築する。
 
-        opv_splitter = QtWidgets.QSplitter(objectName="opv_splitter")
-        opv_splitter.setOrientation(enum_value(Qt, "Horizontal"))
-        opv_rootLayout.addWidget(opv_splitter)
+        JVLタブと同一のコードパスを通すことで、レイアウト差の発生を
+        構造的に防ぐ(review.md指摘#3)。
+        """
+        # 測定設定グループ(OPV固有の初期値のみ指定。行構成はJVLと共通)
+        opv_measurementGroupBox, measurement_widgets = tab_layout.build_measurement_group(
+            "opv", v_min_default=-0.1, v_max_default=1.1, v_step_default=0.02,
+            sweep_single_step=0.01,
+        )
+        self.opv_vMinSpin = measurement_widgets["v_min"]
+        self.opv_vMaxSpin = measurement_widgets["v_max"]
+        self.opv_vStepSpin = measurement_widgets["v_step"]
+        self.opv_iterationSpin = measurement_widgets["iteration"]
+        self.opv_nplcSpin = measurement_widgets["nplc"]
+        self.opv_delaySpin = measurement_widgets["delay"]
+        self.opv_complianceSpin = measurement_widgets["compliance"]
 
-        opv_splitter.setChildrenCollapsible(False)
-        opv_splitter.addWidget(self._build_settings_panel())
-        opv_splitter.addWidget(self._build_display_panel())
-        opv_splitter.setSizes(theme.DISPLAY_PANEL_STRETCH_SIZES)
-        # 設定カラムは伸縮時も横幅を保持し、グラフ側(表示パネル)にのみ
-        # 余剰スペースを割り当てる(設定パネルがグラフにかぶさるのを防ぐ)。
-        opv_splitter.setStretchFactor(0, 0)
-        opv_splitter.setStretchFactor(1, 1)
+        # 保存・実行グループ
+        opv_saveRunGroupBox, save_run_widgets = tab_layout.build_save_run_group(
+            "opv",
+            self._external_sample_name_edit,
+            self._external_save_dir_edit,
+            self._on_browse_save_dir,
+        )
+        self.opv_sampleNameEdit = save_run_widgets["sample_name"]
+        self.opv_saveDirEdit = save_run_widgets["save_dir"]
+        self.opv_startButton = save_run_widgets["start"]
+        self.opv_stopButton = save_run_widgets["stop"]
+        if save_run_widgets["browse"] is not None:
+            self.opv_browseSaveDirButton = save_run_widgets["browse"]
 
-    def _build_settings_panel(self) -> QtWidgets.QScrollArea:
-        opv_settingsScrollArea = QtWidgets.QScrollArea(objectName="opv_settingsScrollArea")
-        opv_settingsScrollArea.setWidgetResizable(True)
-        opv_settingsScrollArea.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
-        opv_settingsScrollArea.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
-
-        opv_settingsContainer = QtWidgets.QWidget(objectName="opv_settingsContainer")
-        opv_settingsLayout = QtWidgets.QVBoxLayout(opv_settingsContainer)
-        opv_settingsLayout.setObjectName("opv_settingsLayout")
-
-        opv_settingsLayout.addWidget(self._build_measurement_group())
-        opv_settingsLayout.addWidget(self._build_save_run_group())
-        opv_settingsLayout.addStretch()
-
-        opv_settingsScrollArea.setWidget(opv_settingsContainer)
-        return opv_settingsScrollArea
-
-    def _build_measurement_group(self) -> QtWidgets.QGroupBox:
-        """接続設定・電圧掃引・タイミング/コンプライアンスを1つのGroupBoxに統合。"""
-        opv_measurementGroupBox = QtWidgets.QGroupBox("測定設定", objectName="opv_measurementGroupBox")
-        opv_measurementFormLayout = QtWidgets.QFormLayout(opv_measurementGroupBox)
-        opv_measurementFormLayout.setObjectName("opv_measurementFormLayout")
-
-        # 電圧掃引(Vmin/Vmax/Vstepを1行)
-        self.opv_vMinSpin = NoScrollDoubleSpinBox(objectName="opv_vMinSpin")
-        self.opv_vMinSpin.setRange(-20.0, 20.0)
-        self.opv_vMinSpin.setDecimals(3)
-        self.opv_vMinSpin.setSingleStep(0.01)
-        self.opv_vMinSpin.setValue(-0.1)
-        self.opv_vMinSpin.setMaximumWidth(80)
-
-        self.opv_vMaxSpin = NoScrollDoubleSpinBox(objectName="opv_vMaxSpin")
-        self.opv_vMaxSpin.setRange(-20.0, 20.0)
-        self.opv_vMaxSpin.setDecimals(3)
-        self.opv_vMaxSpin.setSingleStep(0.01)
-        self.opv_vMaxSpin.setValue(1.1)
-        self.opv_vMaxSpin.setMaximumWidth(80)
-
-        self.opv_vStepSpin = NoScrollDoubleSpinBox(objectName="opv_vStepSpin")
-        self.opv_vStepSpin.setRange(0.001, 10.0)
-        self.opv_vStepSpin.setDecimals(3)
-        self.opv_vStepSpin.setSingleStep(0.01)
-        self.opv_vStepSpin.setValue(0.02)
-        self.opv_vStepSpin.setMaximumWidth(80)
-
-        opv_sweepRow = QtWidgets.QHBoxLayout()
-        opv_sweepRow.setObjectName("opv_sweepRow")
-        opv_sweepRow.addWidget(QtWidgets.QLabel("開始:"))
-        opv_sweepRow.addWidget(self.opv_vMinSpin)
-        opv_sweepRow.addWidget(QtWidgets.QLabel("終了:"))
-        opv_sweepRow.addWidget(self.opv_vMaxSpin)
-        opv_sweepRow.addWidget(QtWidgets.QLabel("ステップ:"))
-        opv_sweepRow.addWidget(self.opv_vStepSpin)
-        opv_measurementFormLayout.addRow("電圧掃引 (V):", opv_sweepRow)
-
-        # 繰り返し回数 / NPLC(1行に統合)
-        self.opv_iterationSpin = NoScrollSpinBox(objectName="opv_iterationSpin")
-        self.opv_iterationSpin.setRange(1, 1000)
-        self.opv_iterationSpin.setValue(3)
-        self.opv_iterationSpin.setMaximumWidth(80)
-
-        self.opv_nplcSpin = NoScrollDoubleSpinBox(objectName="opv_nplcSpin")
-        self.opv_nplcSpin.setRange(0.01, 10.0)
-        self.opv_nplcSpin.setDecimals(2)
-        self.opv_nplcSpin.setSingleStep(0.1)
-        self.opv_nplcSpin.setValue(1.0)
-        self.opv_nplcSpin.setMaximumWidth(80)
-
-        opv_iterationNplcRow = QtWidgets.QHBoxLayout()
-        opv_iterationNplcRow.setObjectName("opv_iterationNplcRow")
-        opv_iterationNplcRow.addWidget(QtWidgets.QLabel("繰り返し:"))
-        opv_iterationNplcRow.addWidget(self.opv_iterationSpin)
-        opv_iterationNplcRow.addWidget(QtWidgets.QLabel("NPLC:"))
-        opv_iterationNplcRow.addWidget(self.opv_nplcSpin)
-        opv_measurementFormLayout.addRow(opv_iterationNplcRow)
-
-        # 遅延 / コンプライアンス(1行に統合)
-        self.opv_delaySpin = NoScrollDoubleSpinBox(objectName="opv_delaySpin")
-        self.opv_delaySpin.setRange(0.0, 60.0)
-        self.opv_delaySpin.setDecimals(2)
-        self.opv_delaySpin.setSingleStep(0.1)
-        self.opv_delaySpin.setValue(1.0)
-        self.opv_delaySpin.setMaximumWidth(80)
-
-        self.opv_complianceSpin = NoScrollDoubleSpinBox(objectName="opv_complianceSpin")
-        self.opv_complianceSpin.setRange(0.0001, 1.0)
-        self.opv_complianceSpin.setDecimals(4)
-        self.opv_complianceSpin.setSingleStep(0.001)
-        self.opv_complianceSpin.setValue(0.02)
-        self.opv_complianceSpin.setMaximumWidth(80)
-
-        opv_delayComplianceRow = QtWidgets.QHBoxLayout()
-        opv_delayComplianceRow.setObjectName("opv_delayComplianceRow")
-        opv_delayComplianceRow.addWidget(QtWidgets.QLabel("遅延[s]:"))
-        opv_delayComplianceRow.addWidget(self.opv_delaySpin)
-        opv_delayComplianceRow.addWidget(QtWidgets.QLabel("コンプライアンス[A]:"))
-        opv_delayComplianceRow.addWidget(self.opv_complianceSpin)
-        opv_measurementFormLayout.addRow(opv_delayComplianceRow)
-
-        return opv_measurementGroupBox
-
-    def _build_save_run_group(self) -> QtWidgets.QGroupBox:
-        """保存設定と実行ボタンを1つのGroupBoxに統合。"""
-        opv_saveRunGroupBox = QtWidgets.QGroupBox("保存・実行", objectName="opv_saveRunGroupBox")
-        opv_saveRunLayout = QtWidgets.QVBoxLayout(opv_saveRunGroupBox)
-        opv_saveRunLayout.setObjectName("opv_saveRunLayout")
-
-        opv_saveFormLayout = QtWidgets.QFormLayout()
-        opv_saveFormLayout.setObjectName("opv_saveFormLayout")
-
-        if self._external_sample_name_edit is not None:
-            # 共通保存設定パネル(MainWindow側)のウィジェットをそのまま参照する。
-            # タブ内には重複表示しない。
-            self.opv_sampleNameEdit = self._external_sample_name_edit
-        else:
-            self.opv_sampleNameEdit = QtWidgets.QLineEdit(objectName="opv_sampleNameEdit")
-            opv_saveFormLayout.addRow("サンプル名:", self.opv_sampleNameEdit)
-
-        if self._external_save_dir_edit is not None:
-            self.opv_saveDirEdit = self._external_save_dir_edit
-        else:
-            self.opv_saveDirEdit = QtWidgets.QLineEdit(objectName="opv_saveDirEdit")
-            self.opv_browseSaveDirButton = QtWidgets.QPushButton(
-                "参照...", objectName="opv_browseSaveDirButton"
-            )
-            self.opv_browseSaveDirButton.clicked.connect(self._on_browse_save_dir)
-
-            opv_saveDirRow = QtWidgets.QHBoxLayout()
-            opv_saveDirRow.setObjectName("opv_saveDirRow")
-            opv_saveDirRow.addWidget(self.opv_saveDirEdit)
-            opv_saveDirRow.addWidget(self.opv_browseSaveDirButton)
-            opv_saveFormLayout.addRow("保存先:", opv_saveDirRow)
-
-        opv_saveRunLayout.addLayout(opv_saveFormLayout)
-
-        self.opv_startButton = QtWidgets.QPushButton("測定開始", objectName="opv_startButton")
-        self.opv_stopButton = QtWidgets.QPushButton("中断", objectName="opv_stopButton")
-        self.opv_stopButton.setEnabled(False)
-
-        opv_runRow = QtWidgets.QHBoxLayout()
-        opv_runRow.setObjectName("opv_runRow")
-        opv_runRow.addWidget(self.opv_startButton)
-        opv_runRow.addWidget(self.opv_stopButton)
-        opv_saveRunLayout.addLayout(opv_runRow)
-
-        return opv_saveRunGroupBox
-
-    def _build_display_panel(self) -> QtWidgets.QWidget:
-        opv_displayPanel = QtWidgets.QWidget(objectName="opv_displayPanel")
-        opv_displayLayout = QtWidgets.QVBoxLayout(opv_displayPanel)
-        opv_displayLayout.setObjectName("opv_displayLayout")
-
+        # 表示パネル側のウィジェット
         self.opv_progressBar = QtWidgets.QProgressBar(objectName="opv_progressBar")
         self.opv_progressBar.setValue(0)
-        opv_displayLayout.addWidget(self.opv_progressBar)
-
         self.opv_plotWidget = pg.PlotWidget()
         self.opv_plotWidget.setObjectName("opv_plotWidget")
-        opv_displayLayout.addWidget(self.opv_plotWidget)
-
-        opv_logGroupBox = QtWidgets.QGroupBox("ログ", objectName="opv_logGroupBox")
-        opv_logLayout = QtWidgets.QVBoxLayout(opv_logGroupBox)
-        opv_logLayout.setObjectName("opv_logLayout")
-
         self.opv_logTextEdit = QtWidgets.QTextEdit(objectName="opv_logTextEdit")
-        self.opv_logTextEdit.setReadOnly(True)
-        opv_logLayout.addWidget(self.opv_logTextEdit)
 
-        opv_displayLayout.addWidget(opv_logGroupBox)
+        tab_layout.build_split_tab(
+            self,
+            "opv",
+            settings_groups=[opv_measurementGroupBox, opv_saveRunGroupBox],
+            display_widget=self.opv_plotWidget,
+            log_text_edit=self.opv_logTextEdit,
+            progress_bar=self.opv_progressBar,
+        )
 
-        return opv_displayPanel
+    def plot_widgets(self) -> list:
+        """このタブが保有する全プロットウィジェット(グラフ表示設定の適用対象)。"""
+        return [self.opv_plotWidget]
 
     # ------------------------------------------------------------------
     # UI値からのConfig構築

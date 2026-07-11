@@ -7,35 +7,15 @@ from __future__ import annotations
 
 import pyqtgraph as pg
 
-from qtcompat import Qt, QtWidgets, enum_value
+from qtcompat import QtWidgets
 from models.measurement.config import ChannelConfig, DualAConfig, DualBConfig
 from viewmodels.dual_channel_viewmodel import DualChannelViewModel
-from views import theme
+from views import tab_layout
 from views.plot_buffer import PlotBuffer
-from views.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
+from views.tab_layout import make_double_spin as _make_double_spin
 
 DEVICE_MODE_ITEMS = ["太陽電池", "発光素子"]
 _DEVICE_TYPE_2612B = "keithley2612b"
-
-
-def _make_double_spin(
-    object_name: str,
-    minimum: float,
-    maximum: float,
-    decimals: int,
-    step: float,
-    value: float,
-    suffix: str = "",
-) -> QtWidgets.QDoubleSpinBox:
-    spin = NoScrollDoubleSpinBox(objectName=object_name)
-    spin.setRange(minimum, maximum)
-    spin.setDecimals(decimals)
-    spin.setSingleStep(step)
-    spin.setValue(value)
-    if suffix:
-        spin.setSuffix(suffix)
-    spin.setMaximumWidth(80)
-    return spin
 
 
 class DualChannelTab(QtWidgets.QWidget):
@@ -136,34 +116,30 @@ class DualChannelTab(QtWidgets.QWidget):
     # モードA
     # ------------------------------------------------------------------
     def _build_mode_a_page(self) -> QtWidgets.QWidget:
+        """モードAページ。共通レイアウトビルダー(views/tab_layout.py)で構築する。"""
         dual_modeAPage = QtWidgets.QWidget(objectName="dual_modeAPage")
-        dual_a_pageLayout = QtWidgets.QVBoxLayout(dual_modeAPage)
 
-        dual_a_splitter = QtWidgets.QSplitter(objectName="dual_a_splitter")
-        dual_a_splitter.setOrientation(enum_value(Qt, "Horizontal"))
-        dual_a_pageLayout.addWidget(dual_a_splitter)
+        settings_groups = self._build_mode_a_settings_groups()
 
-        dual_a_splitter.setChildrenCollapsible(False)
-        dual_a_splitter.addWidget(self._build_mode_a_settings_panel())
-        dual_a_splitter.addWidget(self._build_mode_a_display_panel())
-        dual_a_splitter.setSizes(theme.DISPLAY_PANEL_STRETCH_SIZES)
-        # 設定カラムは伸縮時も横幅を保持し、グラフ側(表示パネル)にのみ
-        # 余剰スペースを割り当てる(設定パネルがグラフにかぶさるのを防ぐ)。
-        dual_a_splitter.setStretchFactor(0, 0)
-        dual_a_splitter.setStretchFactor(1, 1)
+        # 表示パネル側のウィジェット
+        self.dual_a_progressBar = QtWidgets.QProgressBar(objectName="dual_a_progressBar")
+        self.dual_a_progressBar.setValue(0)
+        self.dual_a_plotWidget = pg.PlotWidget()
+        self.dual_a_plotWidget.setObjectName("dual_a_plotWidget")
+        self.dual_a_logTextEdit = QtWidgets.QTextEdit(objectName="dual_a_logTextEdit")
 
+        tab_layout.build_split_tab(
+            dual_modeAPage,
+            "dual_a",
+            settings_groups=settings_groups,
+            display_widget=self.dual_a_plotWidget,
+            log_text_edit=self.dual_a_logTextEdit,
+            progress_bar=self.dual_a_progressBar,
+        )
         return dual_modeAPage
 
-    def _build_mode_a_settings_panel(self) -> QtWidgets.QScrollArea:
-        dual_a_settingsScrollArea = QtWidgets.QScrollArea(objectName="dual_a_settingsScrollArea")
-        dual_a_settingsScrollArea.setWidgetResizable(True)
-        dual_a_settingsScrollArea.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
-        dual_a_settingsScrollArea.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
-
-        dual_a_settingsContainer = QtWidgets.QWidget(objectName="dual_a_settingsContainer")
-        dual_a_settingsLayout = QtWidgets.QVBoxLayout(dual_a_settingsContainer)
-        dual_a_settingsLayout.setObjectName("dual_a_settingsLayout")
-
+    def _build_mode_a_settings_groups(self) -> list:
+        """モードAの設定カラムに積むグループ群(測定設定/保存・実行)を構築する。"""
         # 測定設定(接続・計測対象・掃引・タイミング・輝度計をまとめて1つのGroupBoxに集約)
         dual_a_measurementGroupBox = QtWidgets.QGroupBox(
             "測定設定", objectName="dual_a_measurementGroupBox"
@@ -184,10 +160,7 @@ class DualChannelTab(QtWidgets.QWidget):
         dual_a_sweepRow.addWidget(self.dual_a_vStepSpin)
         dual_a_measurementFormLayout.addRow("電圧掃引(Vmin/Vmax/Vstep):", dual_a_sweepRow)
 
-        self.dual_a_iterationSpin = NoScrollSpinBox(objectName="dual_a_iterationSpin")
-        self.dual_a_iterationSpin.setRange(1, 1000)
-        self.dual_a_iterationSpin.setValue(3)
-        self.dual_a_iterationSpin.setMaximumWidth(80)
+        self.dual_a_iterationSpin = tab_layout.make_iteration_spin("dual_a_iterationSpin")
         self.dual_a_nplcSpin = _make_double_spin("dual_a_nplcSpin", 0.01, 10.0, 2, 0.1, 1.0)
         dual_a_iterationNplcRow = QtWidgets.QHBoxLayout()
         dual_a_iterationNplcRow.setObjectName("dual_a_iterationNplcRow")
@@ -204,8 +177,6 @@ class DualChannelTab(QtWidgets.QWidget):
         dual_a_delayComplianceRow.addWidget(self.dual_a_delaySpin)
         dual_a_delayComplianceRow.addWidget(self.dual_a_complianceSpin)
         dual_a_measurementFormLayout.addRow("遅延時間[s]/コンプライアンス電流[A]:", dual_a_delayComplianceRow)
-
-        dual_a_settingsLayout.addWidget(dual_a_measurementGroupBox)
 
         # 保存・実行
         dual_a_saveRunGroupBox = QtWidgets.QGroupBox("保存・実行", objectName="dual_a_saveRunGroupBox")
@@ -242,69 +213,43 @@ class DualChannelTab(QtWidgets.QWidget):
         dual_a_runRow.addWidget(self.dual_a_stopButton)
         dual_a_saveRunFormLayout.addRow(dual_a_runRow)
 
-        dual_a_settingsLayout.addWidget(dual_a_saveRunGroupBox)
-
-        dual_a_settingsLayout.addStretch()
-
-        dual_a_settingsScrollArea.setWidget(dual_a_settingsContainer)
-
-        return dual_a_settingsScrollArea
-
-    def _build_mode_a_display_panel(self) -> QtWidgets.QWidget:
-        dual_a_displayPanel = QtWidgets.QWidget(objectName="dual_a_displayPanel")
-        dual_a_displayLayout = QtWidgets.QVBoxLayout(dual_a_displayPanel)
-        dual_a_displayLayout.setObjectName("dual_a_displayLayout")
-
-        self.dual_a_progressBar = QtWidgets.QProgressBar(objectName="dual_a_progressBar")
-        dual_a_displayLayout.addWidget(self.dual_a_progressBar)
-
-        self.dual_a_plotWidget = pg.PlotWidget()
-        self.dual_a_plotWidget.setObjectName("dual_a_plotWidget")
-        dual_a_displayLayout.addWidget(self.dual_a_plotWidget)
-
-        self.dual_a_logTextEdit = QtWidgets.QTextEdit(objectName="dual_a_logTextEdit")
-        self.dual_a_logTextEdit.setReadOnly(True)
-        dual_a_displayLayout.addWidget(self.dual_a_logTextEdit)
-
-        return dual_a_displayPanel
+        return [dual_a_measurementGroupBox, dual_a_saveRunGroupBox]
 
     # ------------------------------------------------------------------
     # モードB
     # ------------------------------------------------------------------
     def _build_mode_b_page(self) -> QtWidgets.QWidget:
-        """モードBページ。他タブ・モードAと同じ「左=設定/右=グラフ」の
-        横分割(QSplitter)構成にする(review.md指摘#2への対応)。
+        """モードBページ。共通レイアウトビルダー(views/tab_layout.py)で
+        他タブ・モードAと同一の「左=設定+ログ/右=グラフ」構成にする。
         """
         dual_modeBPage = QtWidgets.QWidget(objectName="dual_modeBPage")
-        dual_b_pageLayout = QtWidgets.QVBoxLayout(dual_modeBPage)
-        dual_b_pageLayout.setObjectName("dual_b_pageLayout")
 
-        dual_b_splitter = QtWidgets.QSplitter(objectName="dual_b_splitter")
-        dual_b_splitter.setOrientation(enum_value(Qt, "Horizontal"))
-        dual_b_splitter.setChildrenCollapsible(False)
-        dual_b_pageLayout.addWidget(dual_b_splitter)
+        settings_groups = self._build_mode_b_settings_groups()
 
-        dual_b_splitter.addWidget(self._build_mode_b_settings_panel())
-        dual_b_splitter.addWidget(self._build_mode_b_display_panel())
-        dual_b_splitter.setSizes(theme.DISPLAY_PANEL_STRETCH_SIZES)
-        # 設定カラムは伸縮時も横幅を保持し、グラフ側(表示パネル)にのみ
-        # 余剰スペースを割り当てる(設定パネルがグラフにかぶさるのを防ぐ)。
-        dual_b_splitter.setStretchFactor(0, 0)
-        dual_b_splitter.setStretchFactor(1, 1)
+        # 表示パネル側のウィジェット(チャンネルA/Bのプロットタブ)
+        self.dual_b_progressBar = QtWidgets.QProgressBar(objectName="dual_b_progressBar")
+        self.dual_b_progressBar.setValue(0)
+        self.dual_b_displayTabWidget = QtWidgets.QTabWidget(objectName="dual_b_displayTabWidget")
+        self.dual_chA_plotWidget = pg.PlotWidget()
+        self.dual_chA_plotWidget.setObjectName("dual_chA_plotWidget")
+        self.dual_b_displayTabWidget.addTab(self.dual_chA_plotWidget, "チャンネルA")
+        self.dual_chB_plotWidget = pg.PlotWidget()
+        self.dual_chB_plotWidget.setObjectName("dual_chB_plotWidget")
+        self.dual_b_displayTabWidget.addTab(self.dual_chB_plotWidget, "チャンネルB")
+        self.dual_b_logTextEdit = QtWidgets.QTextEdit(objectName="dual_b_logTextEdit")
 
+        tab_layout.build_split_tab(
+            dual_modeBPage,
+            "dual_b",
+            settings_groups=settings_groups,
+            display_widget=self.dual_b_displayTabWidget,
+            log_text_edit=self.dual_b_logTextEdit,
+            progress_bar=self.dual_b_progressBar,
+        )
         return dual_modeBPage
 
-    def _build_mode_b_settings_panel(self) -> QtWidgets.QScrollArea:
-        """モードBの左側設定カラム(共通設定+チャンネルA/B+実行)。"""
-        dual_b_settingsScrollArea = QtWidgets.QScrollArea(objectName="dual_b_settingsScrollArea")
-        dual_b_settingsScrollArea.setWidgetResizable(True)
-        dual_b_settingsScrollArea.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
-        dual_b_settingsScrollArea.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
-
-        dual_b_settingsContainer = QtWidgets.QWidget(objectName="dual_b_settingsContainer")
-        dual_b_settingsLayout = QtWidgets.QVBoxLayout(dual_b_settingsContainer)
-        dual_b_settingsLayout.setObjectName("dual_b_settingsLayout")
-
+    def _build_mode_b_settings_groups(self) -> list:
+        """モードBの設定カラムに積むグループ群(共通設定/チャンネルA/B/実行)を構築する。"""
         # 共通設定(保存先をまとめて1つのGroupBoxに集約。接続先/BM9ポートは
         # 「機器設定」ダイアログへ移動済み)
         dual_b_commonGroupBox = QtWidgets.QGroupBox(
@@ -323,8 +268,6 @@ class DualChannelTab(QtWidgets.QWidget):
         dual_b_saveDirRow.addWidget(self.dual_b_saveDirEdit)
         dual_b_saveDirRow.addWidget(self.dual_b_browseSaveDirButton)
         dual_b_commonFormLayout.addRow("保存先:", dual_b_saveDirRow)
-
-        dual_b_settingsLayout.addWidget(dual_b_commonGroupBox)
 
         # チャンネルA/B(設定カラムの幅に収まるよう、横並びではなく縦に積む)
         (
@@ -355,8 +298,6 @@ class DualChannelTab(QtWidgets.QWidget):
             self.dual_chB_sampleNameEdit,
             channelBGroupBox,
         ) = self._build_channel_group("chB", "チャンネルB (smub)")
-        dual_b_settingsLayout.addWidget(channelAGroupBox)
-        dual_b_settingsLayout.addWidget(channelBGroupBox)
 
         # モードB発光素子排他制御の配線
         self.dual_chA_deviceModeCombo.currentTextChanged.connect(
@@ -377,35 +318,12 @@ class DualChannelTab(QtWidgets.QWidget):
         dual_b_buttonRow.addWidget(self.dual_b_startButton)
         dual_b_buttonRow.addWidget(self.dual_b_stopButton)
         dual_b_runLayout.addLayout(dual_b_buttonRow)
-        self.dual_b_progressBar = QtWidgets.QProgressBar(objectName="dual_b_progressBar")
-        dual_b_runLayout.addWidget(self.dual_b_progressBar)
-        dual_b_settingsLayout.addWidget(dual_b_runGroupBox)
 
-        dual_b_settingsLayout.addStretch()
+        return [dual_b_commonGroupBox, channelAGroupBox, channelBGroupBox, dual_b_runGroupBox]
 
-        dual_b_settingsScrollArea.setWidget(dual_b_settingsContainer)
-        return dual_b_settingsScrollArea
-
-    def _build_mode_b_display_panel(self) -> QtWidgets.QWidget:
-        """モードBの右側表示カラム(チャンネルA/Bのプロットタブ + 共通ログ)。"""
-        dual_b_displayPanel = QtWidgets.QWidget(objectName="dual_b_displayPanel")
-        dual_b_displayLayout = QtWidgets.QVBoxLayout(dual_b_displayPanel)
-        dual_b_displayLayout.setObjectName("dual_b_displayLayout")
-
-        self.dual_b_displayTabWidget = QtWidgets.QTabWidget(objectName="dual_b_displayTabWidget")
-        self.dual_chA_plotWidget = pg.PlotWidget()
-        self.dual_chA_plotWidget.setObjectName("dual_chA_plotWidget")
-        self.dual_b_displayTabWidget.addTab(self.dual_chA_plotWidget, "チャンネルA")
-        self.dual_chB_plotWidget = pg.PlotWidget()
-        self.dual_chB_plotWidget.setObjectName("dual_chB_plotWidget")
-        self.dual_b_displayTabWidget.addTab(self.dual_chB_plotWidget, "チャンネルB")
-        dual_b_displayLayout.addWidget(self.dual_b_displayTabWidget)
-
-        self.dual_b_logTextEdit = QtWidgets.QTextEdit(objectName="dual_b_logTextEdit")
-        self.dual_b_logTextEdit.setReadOnly(True)
-        dual_b_displayLayout.addWidget(self.dual_b_logTextEdit)
-
-        return dual_b_displayPanel
+    def plot_widgets(self) -> list:
+        """このタブが保有する全プロットウィジェット(グラフ表示設定の適用対象)。"""
+        return [self.dual_a_plotWidget, self.dual_chA_plotWidget, self.dual_chB_plotWidget]
 
     def _build_channel_group(self, ch_prefix: str, title: str):
         """チャンネルA/B共通の設定グループを構築する(`dual_chA_*`/`dual_chB_*`)。"""
@@ -431,10 +349,7 @@ class DualChannelTab(QtWidgets.QWidget):
         sweep_row.addWidget(v_step_spin)
         form_layout.addRow("電圧掃引 (V):", sweep_row)
 
-        iteration_spin = NoScrollSpinBox(objectName=f"dual_{ch_prefix}_iterationSpin")
-        iteration_spin.setRange(1, 1000)
-        iteration_spin.setValue(3)
-        iteration_spin.setMaximumWidth(80)
+        iteration_spin = tab_layout.make_iteration_spin(f"dual_{ch_prefix}_iterationSpin")
 
         nplc_spin = _make_double_spin(f"dual_{ch_prefix}_nplcSpin", 0.01, 10.0, 2, 0.1, 1.0)
         delay_spin = _make_double_spin(f"dual_{ch_prefix}_delaySpin", 0.0, 60.0, 2, 0.1, 1.0, "")

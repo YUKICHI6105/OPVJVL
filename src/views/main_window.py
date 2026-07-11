@@ -8,11 +8,14 @@ OPV/JVL/2ch活用の各タブをコードで構築して挿入する。
 """
 from __future__ import annotations
 
-from qtcompat import QAction, QtGui, QtWidgets, enum_value, qt_exec
+import os
+
+from qtcompat import QAction, QtCore, QtGui, QtWidgets, enum_value, qt_exec
 from utils import device_settings, persistence, win32_utils
 from utils.logger import get_logger
-from views import theme
-from views.dialogs import DeviceSettingsDialog
+from utils.paths import get_log_dir
+from views import plot_buffer, theme
+from views.dialogs import DeviceSettingsDialog, DisplaySettingsDialog
 from views.dual_channel_tab import DualChannelTab
 from views.jvl_tab import JVLTab
 from views.opv_tab import OPVTab
@@ -87,7 +90,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return widgets
 
     def _restore_measurement_settings(self) -> None:
-        """settings.jsonから前回の測定パラメータをUIへ復元する。"""
+        """settings.jsonから前回の測定パラメータ・グラフ表示設定をUIへ復元する。"""
         settings = persistence.load_settings()
         for key, widget in self._persistent_widgets().items():
             if key not in settings:
@@ -98,12 +101,26 @@ class MainWindow(QtWidgets.QMainWindow):
                 # 破損した値が1つあっても他のキーの復元は続行する
                 logger.warning("設定キー %s の復元に失敗しました: %s", key, e)
 
+        # グラフ表示スタイル(EQEの「表示の設定」から移植)の復元と適用
+        self._graph_style = {
+            key: settings.get(key, default)
+            for key, default in theme.GRAPH_STYLE_DEFAULTS.items()
+        }
+        try:
+            self._apply_graph_style()
+        except (TypeError, ValueError) as e:
+            logger.warning("グラフ表示設定の復元に失敗したためデフォルト値を使用します: %s", e)
+            self._graph_style = dict(theme.GRAPH_STYLE_DEFAULTS)
+            self._apply_graph_style()
+
     def _collect_measurement_settings(self) -> dict:
-        """現在のUI入力値を永続化用の辞書として収集する。"""
-        return {
+        """現在のUI入力値・グラフ表示設定を永続化用の辞書として収集する。"""
+        settings = {
             key: _get_widget_value(widget)
             for key, widget in self._persistent_widgets().items()
         }
+        settings.update(self._graph_style)
+        return settings
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qtの命名規則
         """終了時に測定パラメータをsettings.jsonへ保存する(EQEパターン)。"""
@@ -178,35 +195,36 @@ class MainWindow(QtWidgets.QMainWindow):
         EQEプロジェクト(`views/main_window.py`のinit_ui())のレイアウトに倣い、
         `mainTabWidget`より外側(上)に配置することで、タブを切り替えても
         サンプル名・保存先の入力値が維持されるようにする。
-        1行構成にして高さを最小限に抑え、グラフ表示領域を圧迫しないようにする。
-        縦方向のサイズポリシーもMaximumにして、ウィンドウ拡大時に本パネルではなく
-        タブ側(グラフ等)に余剰スペースが割り当てられるようにする。
-        横幅は各タブの設定カラム(`theme.SETTINGS_PANEL_WIDTH`)に揃えた
-        最大幅とし、`_build_central_widget`側でストレッチと組み合わせることで
-        左側の設定カラム内に収める(review.md指摘#1)。
+        「サンプル名」「保存先」を縦2行のフォームで並べ(review.md指摘#2)、
+        横幅は各タブの設定カラム(`theme.SETTINGS_PANEL_*`)に揃えて
+        左側の設定カラム内に収める。縦方向のサイズポリシーはMaximumにして、
+        ウィンドウ拡大時にタブ側(グラフ等)へ余剰スペースが割り当てられるようにする。
         """
         sharedSaveGroupBox = QtWidgets.QGroupBox("共通保存設定", objectName="sharedSaveGroupBox")
         size_policy_fixed = enum_value(QtWidgets.QSizePolicy, "Maximum")
         size_policy_preferred = enum_value(QtWidgets.QSizePolicy, "Preferred")
         sharedSaveGroupBox.setSizePolicy(size_policy_preferred, size_policy_fixed)
+        sharedSaveGroupBox.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
         sharedSaveGroupBox.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
 
-        sharedSaveRowLayout = QtWidgets.QHBoxLayout(sharedSaveGroupBox)
-        sharedSaveRowLayout.setObjectName("sharedSaveRowLayout")
+        sharedSaveFormLayout = QtWidgets.QFormLayout(sharedSaveGroupBox)
+        sharedSaveFormLayout.setObjectName("sharedSaveFormLayout")
 
-        sharedSaveRowLayout.addWidget(QtWidgets.QLabel("サンプル名:"))
+        # 1行目: サンプル名
         self.sharedSampleNameEdit = QtWidgets.QLineEdit(objectName="sharedSampleNameEdit")
-        sharedSaveRowLayout.addWidget(self.sharedSampleNameEdit)
+        sharedSaveFormLayout.addRow("サンプル名:", self.sharedSampleNameEdit)
 
-        sharedSaveRowLayout.addWidget(QtWidgets.QLabel("保存先:"))
+        # 2行目: 保存先 + 参照ボタン
         self.sharedSaveDirEdit = QtWidgets.QLineEdit(objectName="sharedSaveDirEdit")
-        sharedSaveRowLayout.addWidget(self.sharedSaveDirEdit)
-
         self.sharedBrowseSaveDirButton = QtWidgets.QPushButton(
             "参照...", objectName="sharedBrowseSaveDirButton"
         )
         self.sharedBrowseSaveDirButton.clicked.connect(self._on_browse_shared_save_dir)
-        sharedSaveRowLayout.addWidget(self.sharedBrowseSaveDirButton)
+        sharedSaveDirRow = QtWidgets.QHBoxLayout()
+        sharedSaveDirRow.setObjectName("sharedSaveDirRow")
+        sharedSaveDirRow.addWidget(self.sharedSaveDirEdit)
+        sharedSaveDirRow.addWidget(self.sharedBrowseSaveDirButton)
+        sharedSaveFormLayout.addRow("保存先:", sharedSaveDirRow)
 
         return sharedSaveGroupBox
 
@@ -295,35 +313,191 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sharedSaveDirEdit.setText(directory)
 
     def _build_menu_bar(self) -> None:
+        """メニューバーを構築する。
+
+        EQEプロジェクト(``EQE/src/views/main_window.py`` の ``create_menu_bar``)の
+        メニュー構成から、OPVJVLに適用可能な項目を移植した:
+        終了(Ctrl+Q) / 測定開始(F5)・測定中断(Esc) / グラフ表示の設定(Ctrl+D) /
+        ログファイルの表示・エクスポート / バージョン情報。
+        EQE固有の機能(EQE計算、テーマ切替、公式ドキュメント、
+        リアルタイムログコンソール等)は移植対象外。
+        """
         menuBar = self.menuBar()
         menuBar.setObjectName("menuBar")
 
+        # --- ファイル メニュー ---
         menuFile = menuBar.addMenu("ファイル(&F)")
         menuFile.setObjectName("menuFile")
-        self.actionExit = QAction("終了", self)
+        self.actionExit = QAction("終了(&X)", self)
         self.actionExit.setObjectName("actionExit")
+        self.actionExit.setShortcut(QtGui.QKeySequence("Ctrl+Q"))
+        self.actionExit.setStatusTip("アプリケーションを終了します")
         self.actionExit.triggered.connect(self.close)
         menuFile.addAction(self.actionExit)
 
+        # --- 測定 メニュー ---
         menuMeasurement = menuBar.addMenu("測定(&M)")
         menuMeasurement.setObjectName("menuMeasurement")
+
+        self.actionStartMeasurement = QAction("測定開始(現在のタブ)(&S)", self)
+        self.actionStartMeasurement.setObjectName("actionStartMeasurement")
+        self.actionStartMeasurement.setShortcut(QtGui.QKeySequence("F5"))
+        self.actionStartMeasurement.setStatusTip("表示中のタブの測定を開始します")
+        self.actionStartMeasurement.triggered.connect(self._on_menu_start_measurement)
+        menuMeasurement.addAction(self.actionStartMeasurement)
+
+        self.actionStopMeasurement = QAction("測定中断(&T)", self)
+        self.actionStopMeasurement.setObjectName("actionStopMeasurement")
+        self.actionStopMeasurement.setShortcut(QtGui.QKeySequence("Esc"))
+        self.actionStopMeasurement.setStatusTip("表示中のタブの測定を中断します")
+        self.actionStopMeasurement.triggered.connect(self._on_menu_stop_measurement)
+        menuMeasurement.addAction(self.actionStopMeasurement)
+
+        menuMeasurement.addSeparator()
+
         self.actionDeviceSettings = QAction("機器設定...(&D)", self)
         self.actionDeviceSettings.setObjectName("actionDeviceSettings")
         self.actionDeviceSettings.setShortcut(QtGui.QKeySequence("Ctrl+,"))
         self.actionDeviceSettings.triggered.connect(self._open_device_settings_dialog)
         menuMeasurement.addAction(self.actionDeviceSettings)
 
+        # --- 表示 メニュー ---
+        menuView = menuBar.addMenu("表示(&V)")
+        menuView.setObjectName("menuView")
+        self.actionDisplaySettings = QAction("グラフ表示の設定...(&D)", self)
+        self.actionDisplaySettings.setObjectName("actionDisplaySettings")
+        self.actionDisplaySettings.setShortcut(QtGui.QKeySequence("Ctrl+D"))
+        self.actionDisplaySettings.setStatusTip("グラフの線幅・シンボル・フォント等を設定します")
+        self.actionDisplaySettings.triggered.connect(self._open_display_settings_dialog)
+        menuView.addAction(self.actionDisplaySettings)
+
+        # --- ヘルプ メニュー ---
         menuHelp = menuBar.addMenu("ヘルプ(&H)")
         menuHelp.setObjectName("menuHelp")
-        self.actionAbout = QAction("バージョン情報", self)
+
+        self.actionShowLogFile = QAction("ログファイルを表示(&L)", self)
+        self.actionShowLogFile.setObjectName("actionShowLogFile")
+        self.actionShowLogFile.triggered.connect(self._show_log_file)
+        menuHelp.addAction(self.actionShowLogFile)
+
+        self.actionExportLogFile = QAction("ログファイルのエクスポート...(&E)", self)
+        self.actionExportLogFile.setObjectName("actionExportLogFile")
+        self.actionExportLogFile.triggered.connect(self._export_log_file)
+        menuHelp.addAction(self.actionExportLogFile)
+
+        menuHelp.addSeparator()
+
+        self.actionAbout = QAction("バージョン情報(&A)", self)
         self.actionAbout.setObjectName("actionAbout")
         self.actionAbout.triggered.connect(self._show_about)
         menuHelp.addAction(self.actionAbout)
 
+    # ------------------------------------------------------------------
+    # メニューアクションのハンドラ(EQEから移植した項目)
+    # ------------------------------------------------------------------
+    def _current_run_buttons(self):
+        """表示中のタブ(2ch活用モードは選択中モード)の開始/中断ボタンを返す。"""
+        current = self.mainTabWidget.currentWidget()
+        if current is self.opv_tab:
+            return self.opv_tab.opv_startButton, self.opv_tab.opv_stopButton
+        if current is self.jvl_tab:
+            return self.jvl_tab.jvl_startButton, self.jvl_tab.jvl_stopButton
+        if self.dual_channel_tab.dual_modeSelectCombo.currentIndex() == 0:
+            return (
+                self.dual_channel_tab.dual_a_startButton,
+                self.dual_channel_tab.dual_a_stopButton,
+            )
+        return (
+            self.dual_channel_tab.dual_b_startButton,
+            self.dual_channel_tab.dual_b_stopButton,
+        )
+
+    def _on_menu_start_measurement(self) -> None:
+        """メニュー/F5から表示中タブの測定を開始する(実行中は何もしない)。"""
+        start_button, _stop_button = self._current_run_buttons()
+        if start_button.isEnabled():
+            start_button.click()
+
+    def _on_menu_stop_measurement(self) -> None:
+        """メニュー/Escから表示中タブの測定を中断する(停止中は何もしない)。"""
+        _start_button, stop_button = self._current_run_buttons()
+        if stop_button.isEnabled():
+            stop_button.click()
+
+    def _all_plot_widgets(self) -> list:
+        """全タブの全プロットウィジェット(グラフ表示設定の適用対象)を返す。"""
+        widgets = []
+        for tab in (self.opv_tab, self.jvl_tab, self.dual_channel_tab):
+            widgets.extend(tab.plot_widgets())
+        return widgets
+
+    def _apply_graph_style(self) -> None:
+        """現在のグラフ表示設定を全プロットへ適用する。"""
+        plot_buffer.apply_graph_style(self._all_plot_widgets(), self._graph_style)
+
+    def _open_display_settings_dialog(self) -> None:
+        """「グラフ表示の設定」ダイアログ(EQEのDisplaySettingsDialog移植)を開く。"""
+        dialog = DisplaySettingsDialog(self, dict(self._graph_style))
+        accepted = enum_value(QtWidgets.QDialog, "Accepted")
+        if qt_exec(dialog) == accepted:
+            self._graph_style = dialog.get_settings()
+            self._apply_graph_style()
+            # 次回起動に備えて即時保存する(EQEのsettings_controller踏襲)
+            persistence.save_settings(dict(self._graph_style))
+            logger.info("グラフ表示設定を更新しました: %s", self._graph_style)
+
+    def _log_file_path(self) -> str:
+        return os.path.join(get_log_dir(), "opvjvl_software.log")
+
+    def _show_log_file(self) -> None:
+        """ログファイルをOS既定のアプリケーションで開く(EQEのshow_log_file移植)。"""
+        log_path = self._log_file_path()
+        if os.path.exists(log_path):
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(log_path))
+        else:
+            QtWidgets.QMessageBox.information(
+                self, "情報", f"ログファイルが見つかりません。\nパス: {log_path}"
+            )
+
+    def _export_log_file(self) -> None:
+        """ログファイルを任意の場所へコピー保存する(EQEのexport_log_file移植)。"""
+        import shutil
+
+        log_path = self._log_file_path()
+        if not os.path.exists(log_path):
+            QtWidgets.QMessageBox.information(
+                self, "情報", "ログファイルがまだ存在しないか作成されていません。"
+            )
+            return
+
+        suggested_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+        if not os.path.exists(suggested_dir):
+            suggested_dir = os.path.expanduser("~")
+
+        dest_path, _filter = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "ログファイルのエクスポート",
+            os.path.join(suggested_dir, "opvjvl_software_export.log"),
+            "Log Files (*.log);;All Files (*)",
+        )
+        if not dest_path:
+            return
+        try:
+            shutil.copy2(log_path, dest_path)
+            QtWidgets.QMessageBox.information(
+                self, "成功", f"ログファイルを正常に書き出しました:\n{dest_path}"
+            )
+        except OSError as e:
+            QtWidgets.QMessageBox.critical(
+                self, "エラー", f"ログファイルの書き出しに失敗しました:\n{e}"
+            )
+
     def _show_about(self) -> None:
-        """簡易なバージョン情報ダイアログを表示する。"""
-        QtWidgets.QMessageBox.information(
+        """バージョン情報ダイアログを表示する。"""
+        QtWidgets.QMessageBox.about(
             self,
             "バージョン情報",
-            "太陽電池と発光素子計測プログラム\nOPVJVL",
+            "<h3>太陽電池と発光素子計測プログラム (OPVJVL)</h3>"
+            "<p>太陽電池(OPV)のJV測定および発光素子のJVL測定ソフトウェア</p>"
+            "<p>Ishii &amp; Fukagawa Lab (Chiba University)</p>",
         )
