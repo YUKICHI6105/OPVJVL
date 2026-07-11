@@ -16,6 +16,18 @@ os.environ["PYTEST_QT_API"] = qtcompat.QT_API.lower()
 
 
 @pytest.fixture(scope="session", autouse=True)
+def isolate_settings_file(tmp_path_factory):
+    """テスト実行がプロジェクトルートの settings.json を読み書きしないよう隔離する。
+
+    utils.paths.get_settings_path() は OPVJVL_SETTINGS_PATH 環境変数を優先する。
+    """
+    settings_path = tmp_path_factory.mktemp("settings") / "settings.json"
+    os.environ["OPVJVL_SETTINGS_PATH"] = str(settings_path)
+    yield
+    os.environ.pop("OPVJVL_SETTINGS_PATH", None)
+
+
+@pytest.fixture(scope="session", autouse=True)
 def setup_qt_environment():
     """Qtテスト環境の初期化。"""
     # QMessageBoxがテスト実行中にポップアップしてイベントループをブロックするのを防ぐ

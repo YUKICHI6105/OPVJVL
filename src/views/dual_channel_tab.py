@@ -629,6 +629,42 @@ class DualChannelTab(QtWidgets.QWidget):
         pass
 
     # ------------------------------------------------------------------
+    # 設定の永続化(MainWindowが起動時restore/終了時saveに使用)
+    # ------------------------------------------------------------------
+    def persistent_widgets(self) -> dict:
+        """永続化対象の設定キーとウィジェットの対応表を返す。
+
+        キー名は ``utils.persistence.MEASUREMENT_SETTINGS_DEFAULTS`` と一致させる。
+        """
+        widgets = {
+            # モードA
+            "dual_a_device_mode": self.dual_a_deviceModeCombo,
+            "dual_a_v_min": self.dual_a_vMinSpin,
+            "dual_a_v_max": self.dual_a_vMaxSpin,
+            "dual_a_v_step": self.dual_a_vStepSpin,
+            "dual_a_iteration": self.dual_a_iterationSpin,
+            "dual_a_nplc": self.dual_a_nplcSpin,
+            "dual_a_delay": self.dual_a_delaySpin,
+            "dual_a_compliance": self.dual_a_complianceSpin,
+            # モードB(共通)
+            "dual_b_save_dir": self.dual_b_saveDirEdit,
+        }
+        for prefix in ("chA", "chB"):
+            widgets.update({
+                f"dual_{prefix}_enabled": getattr(self, f"dual_{prefix}_enableCheckBox"),
+                f"dual_{prefix}_device_mode": getattr(self, f"dual_{prefix}_deviceModeCombo"),
+                f"dual_{prefix}_v_min": getattr(self, f"dual_{prefix}_vMinSpin"),
+                f"dual_{prefix}_v_max": getattr(self, f"dual_{prefix}_vMaxSpin"),
+                f"dual_{prefix}_v_step": getattr(self, f"dual_{prefix}_vStepSpin"),
+                f"dual_{prefix}_iteration": getattr(self, f"dual_{prefix}_iterationSpin"),
+                f"dual_{prefix}_nplc": getattr(self, f"dual_{prefix}_nplcSpin"),
+                f"dual_{prefix}_delay": getattr(self, f"dual_{prefix}_delaySpin"),
+                f"dual_{prefix}_use_bm9": getattr(self, f"dual_{prefix}_useBm9CheckBox"),
+                f"dual_{prefix}_sample_name": getattr(self, f"dual_{prefix}_sampleNameEdit"),
+            })
+        return widgets
+
+    # ------------------------------------------------------------------
     # View内に閉じた表示制御
     # ------------------------------------------------------------------
     def _on_channel_device_mode_changed(self, changed_channel: str, text: str) -> None:

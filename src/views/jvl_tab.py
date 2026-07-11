@@ -367,6 +367,25 @@ class JVLTab(QtWidgets.QWidget):
     def _on_finished_ok(self, points: list, csv_path: str, aborted: bool) -> None:
         pass
 
+    # ------------------------------------------------------------------
+    # 設定の永続化(MainWindowが起動時restore/終了時saveに使用)
+    # ------------------------------------------------------------------
+    def persistent_widgets(self) -> dict:
+        """永続化対象の設定キーとウィジェットの対応表を返す。
+
+        キー名は ``utils.persistence.MEASUREMENT_SETTINGS_DEFAULTS`` と一致させる。
+        """
+        return {
+            "jvl_v_min": self.jvl_vMinSpin,
+            "jvl_v_max": self.jvl_vMaxSpin,
+            "jvl_v_step": self.jvl_vStepSpin,
+            "jvl_iteration": self.jvl_iterationSpin,
+            "jvl_nplc": self.jvl_nplcSpin,
+            "jvl_delay": self.jvl_delaySpin,
+            "jvl_compliance": self.jvl_complianceSpin,
+            "jvl_use_luminance": self.jvl_useLuminanceCheckBox,
+        }
+
     def _on_browse_save_dir(self) -> None:
         directory = QtWidgets.QFileDialog.getExistingDirectory(self, "保存先ディレクトリを選択")
         if directory:

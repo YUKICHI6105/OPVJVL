@@ -9,13 +9,47 @@ OPV/JVL/2ch活用の各タブをコードで構築して挿入する。
 from __future__ import annotations
 
 from qtcompat import QAction, QtGui, QtWidgets, enum_value, qt_exec
-from utils import device_settings
+from utils import device_settings, persistence, win32_utils
+from utils.logger import get_logger
 from views.dialogs import DeviceSettingsDialog
 from views.dual_channel_tab import DualChannelTab
 from views.jvl_tab import JVLTab
 from views.opv_tab import OPVTab
 
 _DEVICE_TYPE_BY_INDEX = {0: "keithley2400", 1: "keithley2612b"}
+
+logger = get_logger("main_window")
+
+
+def _get_widget_value(widget):
+    """ウィジェット種別に応じて永続化用の値を取り出す。"""
+    if isinstance(widget, QtWidgets.QDoubleSpinBox):
+        return widget.value()
+    if isinstance(widget, QtWidgets.QSpinBox):
+        return widget.value()
+    if isinstance(widget, QtWidgets.QCheckBox):
+        return widget.isChecked()
+    if isinstance(widget, QtWidgets.QComboBox):
+        return widget.currentText()
+    if isinstance(widget, QtWidgets.QLineEdit):
+        return widget.text()
+    raise TypeError(f"永続化に未対応のウィジェット型です: {type(widget).__name__}")
+
+
+def _set_widget_value(widget, value) -> None:
+    """ウィジェット種別に応じて永続化された値を復元する。型不一致は握り潰さず変換する。"""
+    if isinstance(widget, QtWidgets.QDoubleSpinBox):
+        widget.setValue(float(value))
+    elif isinstance(widget, QtWidgets.QSpinBox):
+        widget.setValue(int(value))
+    elif isinstance(widget, QtWidgets.QCheckBox):
+        widget.setChecked(bool(value))
+    elif isinstance(widget, QtWidgets.QComboBox):
+        widget.setCurrentText(str(value))
+    elif isinstance(widget, QtWidgets.QLineEdit):
+        widget.setText(str(value))
+    else:
+        raise TypeError(f"永続化に未対応のウィジェット型です: {type(widget).__name__}")
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -32,9 +66,52 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_central_widget()
         self._apply_device_settings(self.device_settings)
+        self._restore_measurement_settings()
         self._build_menu_bar()
         self._connect_running_signals()
         self.setStatusBar(QtWidgets.QStatusBar(self))
+
+    # ------------------------------------------------------------------
+    # 測定パラメータの永続化(EQEのpersistence.py/settings_controller.py踏襲)
+    # ------------------------------------------------------------------
+    def _persistent_widgets(self) -> dict:
+        """全タブ+共通保存設定パネルの永続化対象ウィジェット対応表を返す。"""
+        widgets = {
+            "shared_sample_name": self.sharedSampleNameEdit,
+            "shared_save_dir": self.sharedSaveDirEdit,
+        }
+        widgets.update(self.opv_tab.persistent_widgets())
+        widgets.update(self.jvl_tab.persistent_widgets())
+        widgets.update(self.dual_channel_tab.persistent_widgets())
+        return widgets
+
+    def _restore_measurement_settings(self) -> None:
+        """settings.jsonから前回の測定パラメータをUIへ復元する。"""
+        settings = persistence.load_settings()
+        for key, widget in self._persistent_widgets().items():
+            if key not in settings:
+                continue
+            try:
+                _set_widget_value(widget, settings[key])
+            except (TypeError, ValueError) as e:
+                # 破損した値が1つあっても他のキーの復元は続行する
+                logger.warning("設定キー %s の復元に失敗しました: %s", key, e)
+
+    def _collect_measurement_settings(self) -> dict:
+        """現在のUI入力値を永続化用の辞書として収集する。"""
+        return {
+            key: _get_widget_value(widget)
+            for key, widget in self._persistent_widgets().items()
+        }
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qtの命名規則
+        """終了時に測定パラメータをsettings.jsonへ保存する(EQEパターン)。"""
+        try:
+            persistence.save_settings(self._collect_measurement_settings())
+            logger.info("測定パラメータをsettings.jsonへ保存しました。")
+        except Exception as e:  # noqa: BLE001 - 保存失敗で終了を妨げない
+            logger.error("終了時の設定保存に失敗しました: %s", e)
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------
     # UI構築
@@ -193,6 +270,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._running_flags[key] = running
         any_running = any(self._running_flags.values())
         self.actionDeviceSettings.setEnabled(not any_running)
+
+        # 測定中はWindowsのスリープ・ディスプレイ消灯を防止し、
+        # 全測定の終了・中断で通常状態へ復帰する(EQEのprevent_sleep踏襲)
+        if any_running != getattr(self, "_sleep_prevented", False):
+            self._sleep_prevented = any_running
+            win32_utils.prevent_sleep(any_running)
 
     def _on_browse_shared_save_dir(self) -> None:
         directory = QtWidgets.QFileDialog.getExistingDirectory(self, "保存先ディレクトリを選択")

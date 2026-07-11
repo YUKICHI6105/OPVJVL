@@ -34,7 +34,18 @@ def get_base_dir() -> str:
 
 
 def get_settings_path() -> str:
-    """設定ファイル (settings.json) の絶対パスを返す。"""
+    """設定ファイル (settings.json) の絶対パスを返す。
+
+    環境変数 ``OPVJVL_SETTINGS_PATH`` が設定されている場合はそれを優先する
+    (テストや特殊環境で設定ファイルを差し替えるための逃げ道)。
+    """
+    override = os.environ.get("OPVJVL_SETTINGS_PATH")
+    if override:
+        parent = os.path.dirname(override)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        return override
+
     if getattr(sys, "frozen", False):
         appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
         target_dir = os.path.join(appdata, _APP_NAME)
