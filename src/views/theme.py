@@ -9,19 +9,21 @@ from __future__ import annotations
 # 全タブ(OPV/JVL/2ch活用モードA・B)・共通保存設定パネルで統一する。
 # これにより「設定パネルとグラフ領域の余白・比率」がタブ間で揃い、
 # 設定パネルが伸びすぎてグラフ領域を圧迫する(かぶさる)ことも防ぐ。
-SETTINGS_PANEL_WIDTH = 420
-SETTINGS_PANEL_MIN_WIDTH = 340
-SETTINGS_PANEL_MAX_WIDTH = 460
-DISPLAY_PANEL_STRETCH_SIZES = [SETTINGS_PANEL_WIDTH, 780]
+SETTINGS_PANEL_WIDTH = 480
+SETTINGS_PANEL_MIN_WIDTH = 420
+SETTINGS_PANEL_MAX_WIDTH = 600
+DISPLAY_PANEL_STRETCH_SIZES = [SETTINGS_PANEL_WIDTH, 720]
 
 # グラフ表示スタイルのデフォルト値(EQEプロジェクトの「表示の設定」ダイアログから移植)。
 # メニューバー「表示 > グラフ表示の設定...」で変更でき、settings.jsonへ永続化される。
 # キー名はEQEの DEFAULT_SETTINGS と揃える(graph_show_gridのみOPVJVL独自)。
 GRAPH_STYLE_DEFAULTS = {
-    "graph_font_size": 9,      # 軸・目盛フォントサイズ (pt)
-    "graph_line_width": 2.0,   # プロット線幅 (px)
-    "graph_symbol_size": 4,    # プロットシンボルサイズ (px)
-    "graph_show_grid": True,   # グリッド表示の有無
+    "graph_font_size": 9,          # 軸・目盛フォントサイズ (pt)
+    "graph_line_width": 2.0,       # プロット線幅 (px)
+    "graph_symbol_size": 6,        # プロットシンボルサイズ (px)
+    "graph_show_grid": True,       # グリッド表示の有無
+    "graph_show_legend": True,     # 凡例表示の有無(review.md指摘#6。凡例を持つのは現状JVLタブのみ)
+    "graph_legend_font_size": 9,   # 凡例フォントサイズ (pt)
 }
 
 STYLE_SHEET = """

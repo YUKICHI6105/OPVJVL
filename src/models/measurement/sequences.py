@@ -20,6 +20,30 @@ from .config import DualAConfig, DualBConfig, JVLConfig, OPVConfig
 from .result import ChannelPoint, IVLPoint, IVPoint
 
 
+def _interruptible_sleep(
+    total_seconds: float,
+    sleep_fn: Callable[[float], None],
+    is_aborted: Callable[[], bool],
+    chunk_seconds: float = 0.1,
+) -> None:
+    """``total_seconds``の待機を``chunk_seconds``単位に分割して行う。
+
+    測定点間の遅延待機(delay_time)を一度の``sleep_fn``呼び出しで行うと、
+    待機中は``is_aborted()``を確認できず中断要求への応答が最大delay_time秒
+    遅れてしまう。本関数は待機を小刻みに分割し、チャンクの合間に毎回
+    ``is_aborted()``を確認することで中断応答時間を``chunk_seconds``程度に
+    抑える。中断を検知した場合は残り時間を待たずに即座に打ち切る
+    (呼び出し側は本関数から戻った後に改めて``is_aborted()``を確認し、
+    中断ならその回の測定・yieldを行わずbreakすること)。
+    """
+    remaining = total_seconds
+    # 浮動小数点誤差でremainingがわずかに残り続けるのを防ぐための微小しきい値。
+    while remaining > 1e-9 and not is_aborted():
+        step = chunk_seconds if remaining > chunk_seconds else remaining
+        sleep_fn(step)
+        remaining -= step
+
+
 def run_opv_sequence(
     smu: AbstractSourceMeter,
     config: OPVConfig,
@@ -37,7 +61,9 @@ def run_opv_sequence(
             if is_aborted():
                 break
             smu.set_voltage(channel, float(v))
-            sleep_fn(config.delay_time)
+            _interruptible_sleep(config.delay_time, sleep_fn, is_aborted)
+            if is_aborted():
+                break
             current = smu.measure_current(channel)
             yield IVPoint(index=i, voltage=float(v), current=current)
     finally:
@@ -66,7 +92,9 @@ def run_jvl_sequence(
             if is_aborted():
                 break
             smu.set_voltage(channel, float(v))
-            sleep_fn(config.delay_time)
+            _interruptible_sleep(config.delay_time, sleep_fn, is_aborted)
+            if is_aborted():
+                break
             current = smu.measure_current(channel)
             if luminance_meter is not None and hasattr(luminance_meter, "update_reference_current"):
                 luminance_meter.update_reference_current(current)
@@ -107,7 +135,9 @@ def run_dual_a_sequence(
                 break
             smu.set_voltage("smua", float(v))
             smu.set_voltage("smub", 0.0)
-            sleep_fn(config.delay_time)
+            _interruptible_sleep(config.delay_time, sleep_fn, is_aborted)
+            if is_aborted():
+                break
             # smubを仮想接地電流計として使用。符号反転は既存コード踏襲
             current = -1.0 * smu.measure_current("smub")
             if luminance_meter is not None and hasattr(luminance_meter, "update_reference_current"):
@@ -183,7 +213,11 @@ def run_dual_b_sequence(
                 else:
                     smu.set_voltage("smub", _hold_voltage(vb_list, chan_b.hold_at_end))
 
-            sleep_fn(max(chan_a.delay_time, chan_b.delay_time))
+            _interruptible_sleep(
+                max(chan_a.delay_time, chan_b.delay_time), sleep_fn, is_aborted
+            )
+            if is_aborted():
+                break
 
             if chan_a.enabled and i < len(va_list):
                 current_a = smu.measure_current("smua")

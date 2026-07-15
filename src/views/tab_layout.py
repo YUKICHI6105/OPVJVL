@@ -2,9 +2,13 @@
 
 OPV/JVL/2ch活用モードA・Bの各タブは、これまでタブごとにレイアウト構築コードを
 重複実装していたため、タブ間で微妙なレイアウト差(余白・分割比・ログ位置など)が
-発生していた(review.md指摘#3)。本モジュールに「左=設定カラム+ログ / 右=グラフ」
-という共通骨格と、測定設定・保存実行グループの共通ビルダーを集約し、
-全タブが同一コードでレイアウトを構築することで差異を構造的に排除する。
+発生していた(review.md指摘#3)。本モジュールに測定設定・保存実行グループの
+共通ビルダーと、「設定カラム(スクロール)」「表示パネル(進捗+グラフ)」の
+共通骨格を集約し、全タブが同一コードでレイアウトを構築することで差異を構造的に
+排除する。左右分割(設定カラム/ログ ←→ グラフ表示)はメインウィンドウ直下の
+QSplitterが担う(review.md指摘#1)ため、各タブは``build_settings_column()``で
+自身のレイアウトを構築し、``build_display_panel()``で表示パネルを、
+ログウィジェットをそのままMainWindowへ渡す(``display_panel()``/``log_widget()``)。
 
 タブ固有のウィジェット(例: JVLの輝度計チェックボックス)は
 ``build_measurement_group()`` の ``extra_rows`` フックで差し込む。
@@ -14,7 +18,6 @@ from __future__ import annotations
 from typing import Callable, List, Optional
 
 from qtcompat import Qt, QtWidgets, enum_value
-from views import theme
 from views.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
 
 
@@ -48,47 +51,26 @@ def make_iteration_spin(object_name: str) -> QtWidgets.QSpinBox:
     return spin
 
 
-def build_split_tab(
+def build_settings_column(
     container: QtWidgets.QWidget,
     prefix: str,
     settings_groups: List[QtWidgets.QWidget],
-    display_widget: QtWidgets.QWidget,
-    log_text_edit: QtWidgets.QTextEdit,
-    progress_bar: Optional[QtWidgets.QProgressBar] = None,
-) -> QtWidgets.QSplitter:
-    """「左=設定カラム(スクロール)+ログ / 右=進捗+表示」の共通2カラム分割を構築する。
+) -> QtWidgets.QScrollArea:
+    """タブ(またはモードページ)自身のレイアウトとして「設定グループの縦積み
+    スクロールエリア」を構築する(review.md指摘#1: 左右分割はメインウィンドウ
+    直下へ移動したため、タブ側は設定カラムの中身だけを持てばよい)。
 
     Args:
         container: レイアウトを設置するタブ(またはモードページ)ウィジェット。
         prefix: objectName接頭辞(``opv``/``jvl``/``dual_a``/``dual_b``)。
-        settings_groups: 左カラムに上から積む設定グループ群。
-        display_widget: 右カラムの主表示ウィジェット(プロット等)。余剰スペースを全て使う。
-        log_text_edit: 左カラム下部の「ログ」グループに収めるログ表示ウィジェット
-            (review.md指摘#2: ログは左側へ移動)。
-        progress_bar: 右カラム最上部に置く進捗バー(省略可)。
+        settings_groups: 上から積む設定グループ群。
 
     Returns:
-        構築したQSplitter。
+        構築したQScrollArea。
     """
-    root_layout = QtWidgets.QHBoxLayout(container)
+    root_layout = QtWidgets.QVBoxLayout(container)
     root_layout.setObjectName(f"{prefix}_rootLayout")
     root_layout.setContentsMargins(4, 4, 4, 4)
-
-    splitter = QtWidgets.QSplitter(objectName=f"{prefix}_splitter")
-    splitter.setOrientation(enum_value(Qt, "Horizontal"))
-    splitter.setChildrenCollapsible(False)
-    root_layout.addWidget(splitter)
-
-    # ------------------------------------------------------------------
-    # 左カラム: 設定スクロールエリア + ログ
-    # ------------------------------------------------------------------
-    settings_panel = QtWidgets.QWidget(objectName=f"{prefix}_settingsPanel")
-    settings_panel_layout = QtWidgets.QVBoxLayout(settings_panel)
-    settings_panel_layout.setObjectName(f"{prefix}_settingsPanelLayout")
-    settings_panel_layout.setContentsMargins(0, 0, 0, 0)
-    # 設定カラム幅は全タブ共通(theme.SETTINGS_PANEL_*)。
-    settings_panel.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
-    settings_panel.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
 
     scroll_area = QtWidgets.QScrollArea(objectName=f"{prefix}_settingsScrollArea")
     scroll_area.setWidgetResizable(True)
@@ -105,35 +87,37 @@ def build_split_tab(
     settings_layout.addStretch()
     scroll_area.setWidget(settings_container)
 
-    log_group_box = QtWidgets.QGroupBox("ログ", objectName=f"{prefix}_logGroupBox")
-    log_layout = QtWidgets.QVBoxLayout(log_group_box)
-    log_layout.setObjectName(f"{prefix}_logLayout")
-    log_text_edit.setReadOnly(True)
-    log_layout.addWidget(log_text_edit)
-    log_group_box.setMinimumHeight(120)
+    root_layout.addWidget(scroll_area)
+    return scroll_area
 
-    settings_panel_layout.addWidget(scroll_area, 3)
-    settings_panel_layout.addWidget(log_group_box, 1)
 
-    # ------------------------------------------------------------------
-    # 右カラム: 進捗バー + 表示ウィジェット(余剰スペースを全て使う)
-    # ------------------------------------------------------------------
+def build_display_panel(
+    prefix: str,
+    display_widget: QtWidgets.QWidget,
+    progress_bar: Optional[QtWidgets.QProgressBar] = None,
+) -> QtWidgets.QWidget:
+    """「進捗バー(最上部)+表示ウィジェット(残り全部)」の表示パネルを構築する。
+
+    MainWindow右カラムの``displayStack``(QStackedWidget)へ積まれる、タブ横断で
+    共通の表示パネル(review.md指摘#1)。
+
+    Args:
+        prefix: objectName接頭辞(``opv``/``jvl``/``dual_a``/``dual_b``)。
+        display_widget: 主表示ウィジェット(プロット等)。余剰スペースを全て使う。
+        progress_bar: 最上部に置く進捗バー(省略可)。
+
+    Returns:
+        構築したQWidget。
+    """
     display_panel = QtWidgets.QWidget(objectName=f"{prefix}_displayPanel")
     display_layout = QtWidgets.QVBoxLayout(display_panel)
     display_layout.setObjectName(f"{prefix}_displayLayout")
-    display_layout.setContentsMargins(0, 0, 0, 0)
+    display_layout.setContentsMargins(4, 4, 4, 4)
     if progress_bar is not None:
         display_layout.addWidget(progress_bar, 0)
     # review.md指摘#1: グラフ(表示ウィジェット)が縦横の余剰スペースを使い切る。
     display_layout.addWidget(display_widget, 1)
-
-    splitter.addWidget(settings_panel)
-    splitter.addWidget(display_panel)
-    splitter.setSizes(theme.DISPLAY_PANEL_STRETCH_SIZES)
-    # 設定カラムは伸縮時も横幅を保持し、表示パネル側にのみ余剰スペースを割り当てる。
-    splitter.setStretchFactor(0, 0)
-    splitter.setStretchFactor(1, 1)
-    return splitter
+    return display_panel
 
 
 def build_measurement_group(
@@ -155,7 +139,8 @@ def build_measurement_group(
 
     Returns:
         (QGroupBox, ウィジェット辞書) のタプル。辞書キー:
-        ``v_min``/``v_max``/``v_step``/``iteration``/``nplc``/``delay``/``compliance``。
+        ``v_min``/``v_max``/``v_step``/``iteration``/``nplc``/``delay``/``compliance``/
+        ``hysteresis``。
     """
     group_box = QtWidgets.QGroupBox("測定設定", objectName=f"{prefix}_measurementGroupBox")
     form_layout = QtWidgets.QFormLayout(group_box)
@@ -204,6 +189,12 @@ def build_measurement_group(
     delay_compliance_row.addWidget(compliance_spin)
     form_layout.addRow(delay_compliance_row)
 
+    # ヒステリシス測定(往復掃引)チェックボックス
+    hysteresis_checkbox = QtWidgets.QCheckBox(
+        "ヒステリシス測定(往復掃引)", objectName=f"{prefix}_hysteresisCheckBox"
+    )
+    form_layout.addRow(hysteresis_checkbox)
+
     # タブ固有の行の差し込み口(JVLの輝度計チェックボックス等)
     if extra_rows is not None:
         extra_rows(form_layout)
@@ -216,6 +207,7 @@ def build_measurement_group(
         "nplc": nplc_spin,
         "delay": delay_spin,
         "compliance": compliance_spin,
+        "hysteresis": hysteresis_checkbox,
     }
     return group_box, widgets
 
@@ -264,8 +256,10 @@ def build_save_run_group(
 
     save_run_layout.addLayout(save_form_layout)
 
-    start_button = QtWidgets.QPushButton("測定開始", objectName=f"{prefix}_startButton")
-    stop_button = QtWidgets.QPushButton("中断", objectName=f"{prefix}_stopButton")
+    # ショートカット(F5/Esc)をボタンのラベルに明記する(review.md項目4)。
+    # QSSの `text*="開始"`/`text*="中断"` セレクタは部分一致のため配色は維持される。
+    start_button = QtWidgets.QPushButton("測定開始 (F5)", objectName=f"{prefix}_startButton")
+    stop_button = QtWidgets.QPushButton("中断 (Esc)", objectName=f"{prefix}_stopButton")
     stop_button.setEnabled(False)
 
     run_row = QtWidgets.QHBoxLayout()

@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import os
 
-from qtcompat import QAction, QtCore, QtGui, QtWidgets, enum_value, qt_exec
+from qtcompat import QAction, QShortcut, Qt, QtCore, QtGui, QtWidgets, enum_value, qt_exec
 from utils import device_settings, persistence, win32_utils
 from utils.logger import get_logger
 from utils.paths import get_log_dir
 from views import plot_buffer, theme
+from views.data_viewer import DataViewerDialog, parse_measurement_csv
 from views.dialogs import DeviceSettingsDialog, DisplaySettingsDialog
 from views.dual_channel_tab import DualChannelTab
 from views.jvl_tab import JVLTab
@@ -67,6 +68,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.developer_mode = developer_mode
         self.device_settings = device_settings.load_device_settings()
+        # 「データを開く」で開いたDataViewerDialogをGCされないよう保持するリスト
+        # (review.md項目5。複数同時に開けるため、closeされたものだけ都度取り除く)。
+        self._data_viewer_dialogs: list = []
 
         self._build_central_widget()
         self._apply_device_settings(self.device_settings)
@@ -123,7 +127,14 @@ class MainWindow(QtWidgets.QMainWindow):
         return settings
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qtの命名規則
-        """終了時に測定パラメータをsettings.jsonへ保存する(EQEパターン)。"""
+        """終了時に実行中の測定を安全停止し、測定パラメータをsettings.jsonへ保存する。
+
+        review.md項目3: Ctrl+C(SIGINT)によるウィンドウクローズを含め、測定実行中に
+        アプリが終了しようとした場合でも、各ViewModelへ協調的中断を要求してから
+        (workerの``finally``節で機器の出力OFF等が走る猶予として``wait()``する)
+        終了処理(設定保存)を進める。
+        """
+        self._stop_running_measurements()
         try:
             persistence.save_settings(self._collect_measurement_settings())
             logger.info("測定パラメータをsettings.jsonへ保存しました。")
@@ -131,24 +142,53 @@ class MainWindow(QtWidgets.QMainWindow):
             logger.error("終了時の設定保存に失敗しました: %s", e)
         super().closeEvent(event)
 
+    def _stop_running_measurements(self) -> None:
+        """実行中の全測定(OPV/JVL/2chモードA/B)へ中断要求を出し、停止を待つ。
+
+        MVVMの依存方向(ViewModelはViewを参照しない)は維持したまま、
+        View(MainWindow)側からViewModelの公開APIを呼ぶ形で安全停止を行う。
+        """
+        try:
+            self.opv_tab.viewModel.stop_and_wait()
+            self.jvl_tab.viewModel.stop_and_wait()
+            self.dual_channel_tab.viewModel.stop_and_wait_a()
+            self.dual_channel_tab.viewModel.stop_and_wait_b()
+        except Exception as e:  # noqa: BLE001 - 停止処理の失敗で終了を妨げない
+            logger.error("終了時の測定安全停止に失敗しました: %s", e)
+
     # ------------------------------------------------------------------
     # UI構築
     # ------------------------------------------------------------------
     def _build_central_widget(self) -> None:
-        centralWidget = QtWidgets.QWidget(objectName="centralWidget")
-        centralLayout = QtWidgets.QVBoxLayout(centralWidget)
-        centralLayout.setObjectName("centralLayout")
-        centralLayout.setContentsMargins(0, 0, 0, 0)
+        """centralWidgetを水平QSplitterにし、レイアウトをメインウィンドウ直下へ移動する。
+
+        review.md指摘#1: 従来は各タブ内部(views/tab_layout.pyのbuild_split_tab())で
+        「左=設定+ログ / 右=グラフ」の分割を行っていたが、タブを跨いだ左右幅の
+        統一・ログ領域の最大化がタブごとの実装に依存してしまっていた。
+        本メソッドでは分割をメインウィンドウ直下へ引き上げ、
+          左カラム: 共通保存設定パネル(上) → mainTabWidget(中、内容ぶんの高さ) →
+                    「ログ」グループ(下、残り余白を全て使用)
+          右カラム: displayStack(各タブの表示パネルをQStackedWidgetで切替)
+        という構成にする。mainTabWidgetのcurrentChangedでログ用/表示用スタックの
+        インデックスを同期する(2ch活用モードはモードA/B用のスタックをタブ側が持ち、
+        dual_modeSelectComboで同期する)。
+        """
+        centralSplitter = QtWidgets.QSplitter(objectName="centralSplitter")
+        centralSplitter.setOrientation(enum_value(Qt, "Horizontal"))
+        centralSplitter.setChildrenCollapsible(False)
+
+        # ------------------------------------------------------------------
+        # 左カラム: 共通保存設定パネル + mainTabWidget + ログ(残り余白を全て使用)
+        # ------------------------------------------------------------------
+        leftColumnWidget = QtWidgets.QWidget(objectName="leftColumnWidget")
+        leftColumnLayout = QtWidgets.QVBoxLayout(leftColumnWidget)
+        leftColumnLayout.setObjectName("leftColumnLayout")
+        leftColumnLayout.setContentsMargins(4, 4, 4, 4)
+        leftColumnWidget.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
+        leftColumnWidget.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
 
         self.sharedSaveGroupBox = self._build_shared_save_group()
-        # 各タブの設定カラム(views/theme.py の SETTINGS_PANEL_WIDTH)と横幅を揃え、
-        # 右側に空のストレッチを添えることで「左半分の設定カラム内に収まる」よう
-        # 左詰めで配置する(review.md指摘#1: 左半分からはみ出す問題への対応)。
-        sharedSaveRow = QtWidgets.QHBoxLayout()
-        sharedSaveRow.setObjectName("sharedSaveRow")
-        sharedSaveRow.addWidget(self.sharedSaveGroupBox)
-        sharedSaveRow.addStretch(1)
-        centralLayout.addLayout(sharedSaveRow, 0)
+        leftColumnLayout.addWidget(self.sharedSaveGroupBox, 0)
 
         self.opv_tab = OPVTab(
             sample_name_edit=self.sharedSampleNameEdit,
@@ -169,19 +209,55 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mainTabWidget.addTab(self.opv_tab, "OPVモード")
         self.mainTabWidget.addTab(self.jvl_tab, "JVLモード")
         self.mainTabWidget.addTab(self.dual_channel_tab, "2ch活用モード")
+        # mainTabWidgetはstretch=0で「内容ぶんの高さ」に留め、
+        # 残りの縦スペースは全て下の「ログ」グループへ回す。
+        leftColumnLayout.addWidget(self.mainTabWidget, 0)
 
+        logGroupBox = QtWidgets.QGroupBox("ログ", objectName="logGroupBox")
+        logGroupLayout = QtWidgets.QVBoxLayout(logGroupBox)
+        logGroupLayout.setObjectName("logGroupLayout")
+        self.logStack = QtWidgets.QStackedWidget(objectName="logStack")
+        self.logStack.addWidget(self.opv_tab.log_widget())
+        self.logStack.addWidget(self.jvl_tab.log_widget())
+        self.logStack.addWidget(self.dual_channel_tab.log_widget())
+        logGroupLayout.addWidget(self.logStack)
+        leftColumnLayout.addWidget(logGroupBox, 1)
+
+        centralSplitter.addWidget(leftColumnWidget)
+
+        # ------------------------------------------------------------------
+        # 右カラム: 各タブの表示パネル(進捗バー+グラフ)をQStackedWidgetで切替
+        # ------------------------------------------------------------------
+        self.displayStack = QtWidgets.QStackedWidget(objectName="displayStack")
+        self.displayStack.addWidget(self.opv_tab.display_panel())
+        self.displayStack.addWidget(self.jvl_tab.display_panel())
+        self.displayStack.addWidget(self.dual_channel_tab.display_panel())
+        centralSplitter.addWidget(self.displayStack)
+
+        # 左カラムは伸縮時も横幅を保持し、右カラム(表示パネル)にのみ
+        # 余剰スペースを割り当てる。
+        centralSplitter.setStretchFactor(0, 0)
+        centralSplitter.setStretchFactor(1, 1)
+        centralSplitter.setSizes(theme.DISPLAY_PANEL_STRETCH_SIZES)
+
+        # タブ切り替えでログ/表示スタックのインデックスを同期する。
+        self.mainTabWidget.currentChanged.connect(self._on_main_tab_changed)
         # 共通保存設定パネルは、「2ch活用モードタブ」が表示中かつその内部モードが
         # 「モードB」の間だけ非表示にする(モードBはチャンネルA/Bそれぞれ別の素子を
         # 計測するため、保存先・サンプル名をタブ内でローカルに個別入力する運用のため)。
         # OPV/JVLタブ表示中や2ch活用モードAの間は、常に共通保存設定パネルを表示する。
-        self.mainTabWidget.currentChanged.connect(self._update_shared_panel_visibility)
         self.dual_channel_tab.dual_modeSelectCombo.currentIndexChanged.connect(
             self._update_shared_panel_visibility
         )
-        self._update_shared_panel_visibility()
+        self._on_main_tab_changed(self.mainTabWidget.currentIndex())
 
-        centralLayout.addWidget(self.mainTabWidget, 1)
-        self.setCentralWidget(centralWidget)
+        self.setCentralWidget(centralSplitter)
+
+    def _on_main_tab_changed(self, index: int) -> None:
+        """mainTabWidgetのタブ切り替えに、ログ用/表示用スタックのインデックスを同期する。"""
+        self.logStack.setCurrentIndex(index)
+        self.displayStack.setCurrentIndex(index)
+        self._update_shared_panel_visibility()
 
     def _update_shared_panel_visibility(self, *_args) -> None:
         """2ch活用モードタブがモードB表示中の場合のみ、共通保存設定パネルを隠す。"""
@@ -237,29 +313,47 @@ class MainWindow(QtWidgets.QMainWindow):
         開発者モードでない場合は、settings.jsonに過去保存された use_mock=True が
         残っていても、実機のつもりが誤ってモックのままだったという事故を防ぐため
         必ずFalseとして扱う(self.developer_modeとの論理積を取る)。
+
+        OPVモードとJVLモードは同一のソースメータを使うため、機器設定ダイアログでは
+        opvjvl_* キーに統合されている。両タブへ同じ値を渡す(タブ側のAPIは
+        従来通り個別のため、ここで同一値を配る形で橋渡しする)。
+        2ch活用モードA/Bも同様にdual_*キーに統合されており、
+        apply_device_settings_mode_a / _mode_b の両方へ同一値を渡す。
         """
+        opvjvl_device_type = _DEVICE_TYPE_BY_INDEX.get(
+            settings.get("opvjvl_device_type_index", 0), "keithley2400"
+        )
+        opvjvl_connection = settings.get("opvjvl_connection", "")
+        opvjvl_channel = settings.get("opvjvl_channel", "smua")
+        opvjvl_use_mock = self.developer_mode and settings.get("opvjvl_use_mock", False)
+
         self.opv_tab.apply_device_settings(
-            _DEVICE_TYPE_BY_INDEX.get(settings.get("opv_device_type_index", 0), "keithley2400"),
-            settings.get("opv_connection", ""),
-            settings.get("opv_channel", "smua"),
-            self.developer_mode and settings.get("opv_use_mock", False),
+            opvjvl_device_type,
+            opvjvl_connection,
+            opvjvl_channel,
+            opvjvl_use_mock,
         )
         self.jvl_tab.apply_device_settings(
-            _DEVICE_TYPE_BY_INDEX.get(settings.get("jvl_device_type_index", 0), "keithley2400"),
-            settings.get("jvl_connection", ""),
-            settings.get("jvl_bm9_port", ""),
-            settings.get("jvl_channel", "smua"),
-            self.developer_mode and settings.get("jvl_use_mock", False),
+            opvjvl_device_type,
+            opvjvl_connection,
+            settings.get("opvjvl_bm9_port", ""),
+            opvjvl_channel,
+            opvjvl_use_mock,
         )
+
+        dual_connection = settings.get("dual_connection", "")
+        dual_bm9_port = settings.get("dual_bm9_port", "")
+        dual_use_mock = self.developer_mode and settings.get("dual_use_mock", False)
+
         self.dual_channel_tab.apply_device_settings_mode_a(
-            settings.get("dual_a_connection", ""),
-            settings.get("dual_a_bm9_port", ""),
-            self.developer_mode and settings.get("dual_a_use_mock", False),
+            dual_connection,
+            dual_bm9_port,
+            dual_use_mock,
         )
         self.dual_channel_tab.apply_device_settings_mode_b(
-            settings.get("dual_b_connection", ""),
-            settings.get("dual_b_bm9_port", ""),
-            self.developer_mode and settings.get("dual_b_use_mock", False),
+            dual_connection,
+            dual_bm9_port,
+            dual_use_mock,
         )
 
     def _open_device_settings_dialog(self) -> None:
@@ -269,6 +363,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.device_settings = dialog.get_settings()
             self._apply_device_settings(self.device_settings)
             device_settings.save_device_settings(self.device_settings)
+            # 機器選択(2400/2612B)の変更でOPV/JVL⇔2ch群のクロスロック要否が
+            # 変わるため、排他ロックを再計算する。
+            self._update_start_button_locks()
 
     def _connect_running_signals(self) -> None:
         """いずれかの測定が実行中の間は「機器設定」メニュー項目を無効化する。
@@ -295,6 +392,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dual_channel_tab.viewModel.running_changed_b.connect(
             lambda running: self._on_any_running_changed("dual_b", running)
         )
+        self._update_start_button_locks()
 
     def _on_any_running_changed(self, key: str, running: bool) -> None:
         self._running_flags[key] = running
@@ -307,20 +405,83 @@ class MainWindow(QtWidgets.QMainWindow):
             self._sleep_prevented = any_running
             win32_utils.prevent_sleep(any_running)
 
+        self._update_start_button_locks()
+
+    def _update_start_button_locks(self) -> None:
+        """機器共有に基づく測定の排他制御(項目3・4)。
+
+        OPV⇔JVLは常に相互排他(同一機器共有)。2chモードA⇔Bも常に相互排他
+        (同一2612B共有)。OPV/JVLの機器選択が2612Bの場合のみ、OPV/JVL群⇔
+        2ch群も相互排他になる(2400選択時は物理的に別機器のため並行実行可)。
+
+        タブ側の``_on_running_changed``系ハンドラが自タブ終了時に
+        ``setEnabled(True)``した直後でも、後で実行される本メソッドが
+        4ボタン全ての有効/無効を計算し直して上書きする(結線順序に依存しない)。
+        """
+        flags = self._running_flags
+        opv_running = flags.get("opv", False)
+        jvl_running = flags.get("jvl", False)
+        dual_a_running = flags.get("dual_a", False)
+        dual_b_running = flags.get("dual_b", False)
+
+        opvjvl_running = opv_running or jvl_running
+        dual_running = dual_a_running or dual_b_running
+        # OPV/JVLの機器選択が2612B(index==1)の場合のみ、2ch群(同一2612B共有)との
+        # 相互排他を追加する。2400選択時(index==0)は物理的に別機器のため対象外。
+        cross_lock_enabled = self.device_settings.get("opvjvl_device_type_index", 0) == 1
+
+        opv_locked_by = None
+        if jvl_running:
+            opv_locked_by = "JVLモード測定中のため開始できません(機器共有)"
+        elif cross_lock_enabled and dual_running:
+            opv_locked_by = "2ch活用モード測定中のため開始できません(機器共有)"
+
+        jvl_locked_by = None
+        if opv_running:
+            jvl_locked_by = "OPVモード測定中のため開始できません(機器共有)"
+        elif cross_lock_enabled and dual_running:
+            jvl_locked_by = "2ch活用モード測定中のため開始できません(機器共有)"
+
+        dual_a_locked_by = None
+        if dual_b_running:
+            dual_a_locked_by = "2ch活用モードB測定中のため開始できません(機器共有)"
+        elif cross_lock_enabled and opvjvl_running:
+            dual_a_locked_by = "OPV/JVLモード測定中のため開始できません(機器共有)"
+
+        dual_b_locked_by = None
+        if dual_a_running:
+            dual_b_locked_by = "2ch活用モードA測定中のため開始できません(機器共有)"
+        elif cross_lock_enabled and opvjvl_running:
+            dual_b_locked_by = "OPV/JVLモード測定中のため開始できません(機器共有)"
+
+        self._apply_start_button_lock(self.opv_tab.opv_startButton, opv_running, opv_locked_by)
+        self._apply_start_button_lock(self.jvl_tab.jvl_startButton, jvl_running, jvl_locked_by)
+        self._apply_start_button_lock(
+            self.dual_channel_tab.dual_a_startButton, dual_a_running, dual_a_locked_by
+        )
+        self._apply_start_button_lock(
+            self.dual_channel_tab.dual_b_startButton, dual_b_running, dual_b_locked_by
+        )
+
+    @staticmethod
+    def _apply_start_button_lock(button, running: bool, locked_reason) -> None:
+        """開始ボタン1つ分のsetEnabled/tooltipを計算し直す。"""
+        button.setEnabled(not running and locked_reason is None)
+        button.setToolTip(locked_reason or "")
+
     def _on_browse_shared_save_dir(self) -> None:
         directory = QtWidgets.QFileDialog.getExistingDirectory(self, "保存先ディレクトリを選択")
         if directory:
             self.sharedSaveDirEdit.setText(directory)
 
     def _build_menu_bar(self) -> None:
-        """メニューバーを構築する。
+        """メニューバーを構築する(review.md項目4: ファイル/設定/ヘルプの3メニュー構成)。
 
-        EQEプロジェクト(``EQE/src/views/main_window.py`` の ``create_menu_bar``)の
-        メニュー構成から、OPVJVLに適用可能な項目を移植した:
-        終了(Ctrl+Q) / 測定開始(F5)・測定中断(Esc) / グラフ表示の設定(Ctrl+D) /
-        ログファイルの表示・エクスポート / バージョン情報。
-        EQE固有の機能(EQE計算、テーマ切替、公式ドキュメント、
-        リアルタイムログコンソール等)は移植対象外。
+        従来の「測定」「表示」メニューは廃止し、「機器設定...」「グラフ表示の設定...」を
+        新設の「設定」メニューへ統合、「ファイル」メニューに「データを開く...」(項目5)を
+        追加、「ヘルプ」メニューから「バージョン情報」を削除した。
+        測定開始(F5)/測定中断(Esc)はメニュー項目としては廃止するが、QShortcutとして
+        引き続き有効にする(``_install_run_shortcuts``)。
         """
         menuBar = self.menuBar()
         menuBar.setObjectName("menuBar")
@@ -328,6 +489,23 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- ファイル メニュー ---
         menuFile = menuBar.addMenu("ファイル(&F)")
         menuFile.setObjectName("menuFile")
+
+        self.actionSaveResultAs = QAction("測定データを別名保存...(&S)", self)
+        self.actionSaveResultAs.setObjectName("actionSaveResultAs")
+        self.actionSaveResultAs.setShortcut(QtGui.QKeySequence("Ctrl+S"))
+        self.actionSaveResultAs.setStatusTip("表示中のタブの最後の測定結果を任意のファイル名で保存します")
+        self.actionSaveResultAs.triggered.connect(self._on_menu_save_result_as)
+        menuFile.addAction(self.actionSaveResultAs)
+
+        self.actionOpenData = QAction("データを開く...(&O)", self)
+        self.actionOpenData.setObjectName("actionOpenData")
+        self.actionOpenData.setShortcut(QtGui.QKeySequence("Ctrl+O"))
+        self.actionOpenData.setStatusTip("測定CSVファイルを開いてグラフ表示します")
+        self.actionOpenData.triggered.connect(self._on_menu_open_data)
+        menuFile.addAction(self.actionOpenData)
+
+        menuFile.addSeparator()
+
         self.actionExit = QAction("終了(&X)", self)
         self.actionExit.setObjectName("actionExit")
         self.actionExit.setShortcut(QtGui.QKeySequence("Ctrl+Q"))
@@ -335,41 +513,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actionExit.triggered.connect(self.close)
         menuFile.addAction(self.actionExit)
 
-        # --- 測定 メニュー ---
-        menuMeasurement = menuBar.addMenu("測定(&M)")
-        menuMeasurement.setObjectName("menuMeasurement")
+        # --- 設定 メニュー(旧「測定」の機器設定 + 旧「表示」のグラフ表示設定) ---
+        menuSettings = menuBar.addMenu("設定(&S)")
+        menuSettings.setObjectName("menuSettings")
 
-        self.actionStartMeasurement = QAction("測定開始(現在のタブ)(&S)", self)
-        self.actionStartMeasurement.setObjectName("actionStartMeasurement")
-        self.actionStartMeasurement.setShortcut(QtGui.QKeySequence("F5"))
-        self.actionStartMeasurement.setStatusTip("表示中のタブの測定を開始します")
-        self.actionStartMeasurement.triggered.connect(self._on_menu_start_measurement)
-        menuMeasurement.addAction(self.actionStartMeasurement)
-
-        self.actionStopMeasurement = QAction("測定中断(&T)", self)
-        self.actionStopMeasurement.setObjectName("actionStopMeasurement")
-        self.actionStopMeasurement.setShortcut(QtGui.QKeySequence("Esc"))
-        self.actionStopMeasurement.setStatusTip("表示中のタブの測定を中断します")
-        self.actionStopMeasurement.triggered.connect(self._on_menu_stop_measurement)
-        menuMeasurement.addAction(self.actionStopMeasurement)
-
-        menuMeasurement.addSeparator()
-
-        self.actionDeviceSettings = QAction("機器設定...(&D)", self)
+        # objectName(actionDeviceSettings)は既存の排他制御(_on_any_running_changed)
+        # から参照されているため維持する。表示テキストのみ「測定の設定...」へ変更。
+        self.actionDeviceSettings = QAction("測定の設定...(&M)", self)
         self.actionDeviceSettings.setObjectName("actionDeviceSettings")
         self.actionDeviceSettings.setShortcut(QtGui.QKeySequence("Ctrl+,"))
+        self.actionDeviceSettings.setStatusTip("接続先(COM/VISAポート)等の機器設定を行います")
         self.actionDeviceSettings.triggered.connect(self._open_device_settings_dialog)
-        menuMeasurement.addAction(self.actionDeviceSettings)
+        menuSettings.addAction(self.actionDeviceSettings)
 
-        # --- 表示 メニュー ---
-        menuView = menuBar.addMenu("表示(&V)")
-        menuView.setObjectName("menuView")
-        self.actionDisplaySettings = QAction("グラフ表示の設定...(&D)", self)
+        self.actionDisplaySettings = QAction("表示の設定...(&D)", self)
         self.actionDisplaySettings.setObjectName("actionDisplaySettings")
         self.actionDisplaySettings.setShortcut(QtGui.QKeySequence("Ctrl+D"))
         self.actionDisplaySettings.setStatusTip("グラフの線幅・シンボル・フォント等を設定します")
         self.actionDisplaySettings.triggered.connect(self._open_display_settings_dialog)
-        menuView.addAction(self.actionDisplaySettings)
+        menuSettings.addAction(self.actionDisplaySettings)
 
         # --- ヘルプ メニュー ---
         menuHelp = menuBar.addMenu("ヘルプ(&H)")
@@ -385,12 +547,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actionExportLogFile.triggered.connect(self._export_log_file)
         menuHelp.addAction(self.actionExportLogFile)
 
-        menuHelp.addSeparator()
+        # 測定開始(F5)/測定中断(Esc)はメニュー項目としては廃止し、
+        # QShortcutとしてのみ提供する(開始/中断ボタンのラベルにも明記済み)。
+        self._install_run_shortcuts()
 
-        self.actionAbout = QAction("バージョン情報(&A)", self)
-        self.actionAbout.setObjectName("actionAbout")
-        self.actionAbout.triggered.connect(self._show_about)
-        menuHelp.addAction(self.actionAbout)
+    def _install_run_shortcuts(self) -> None:
+        """F5(測定開始)/Esc(測定中断)のQShortcutをMainWindowへ登録する(review.md項目4)。
+
+        メニュー項目としては廃止したが、ショートカット自体は維持する要件のため、
+        既存の``_on_menu_start_measurement``/``_on_menu_stop_measurement``
+        (表示中タブの開始/中断ボタンをclickする実装)をそのまま流用する。
+        参照はGC防止のためインスタンス変数へ保持する。
+        """
+        self._startShortcut = QShortcut(QtGui.QKeySequence("F5"), self)
+        self._startShortcut.setObjectName("startMeasurementShortcut")
+        self._startShortcut.activated.connect(self._on_menu_start_measurement)
+
+        self._stopShortcut = QShortcut(QtGui.QKeySequence("Esc"), self)
+        self._stopShortcut.setObjectName("stopMeasurementShortcut")
+        self._stopShortcut.activated.connect(self._on_menu_stop_measurement)
 
     # ------------------------------------------------------------------
     # メニューアクションのハンドラ(EQEから移植した項目)
@@ -412,6 +587,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.dual_channel_tab.dual_b_stopButton,
         )
 
+    def _on_menu_save_result_as(self) -> None:
+        """ファイルメニュー/Ctrl+Sから、表示中タブの最後の測定結果を別名保存する。
+
+        2ch活用モードタブはモードA/Bいずれが表示中かをタブ側で判定する。
+        """
+        current = self.mainTabWidget.currentWidget()
+        current.save_last_result_as(self)
+
     def _on_menu_start_measurement(self) -> None:
         """メニュー/F5から表示中タブの測定を開始する(実行中は何もしない)。"""
         start_button, _stop_button = self._current_run_buttons()
@@ -423,6 +606,38 @@ class MainWindow(QtWidgets.QMainWindow):
         _start_button, stop_button = self._current_run_buttons()
         if stop_button.isEnabled():
             stop_button.click()
+
+    def _on_menu_open_data(self) -> None:
+        """ファイルメニュー/Ctrl+Oから測定CSVを開き、専用ビューアで表示する(review.md項目5)。
+
+        パース結果が0点の場合はビューアを開かずエラーダイアログを表示する。
+        開いたダイアログは``self._data_viewer_dialogs``で参照保持し(GC防止)、
+        複数同時に開けるようにする。
+        """
+        path, _filter = QtWidgets.QFileDialog.getOpenFileName(
+            self, "データを開く", "", "CSV Files (*.csv);;All Files (*)"
+        )
+        if not path:
+            return
+
+        voltages, _currents, _luminances = parse_measurement_csv(path)
+        if not voltages:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "エラー",
+                f"CSVファイルから有効な測定データを読み込めませんでした。\nパス: {path}",
+            )
+            return
+
+        dialog = DataViewerDialog(path, self)
+        self._data_viewer_dialogs.append(dialog)
+        dialog.finished.connect(lambda _result, d=dialog: self._on_data_viewer_closed(d))
+        dialog.show()
+
+    def _on_data_viewer_closed(self, dialog) -> None:
+        """DataViewerDialogが閉じられたら参照リストから取り除き、GCを許可する。"""
+        if dialog in self._data_viewer_dialogs:
+            self._data_viewer_dialogs.remove(dialog)
 
     def _all_plot_widgets(self) -> list:
         """全タブの全プロットウィジェット(グラフ表示設定の適用対象)を返す。"""
@@ -491,13 +706,3 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(
                 self, "エラー", f"ログファイルの書き出しに失敗しました:\n{e}"
             )
-
-    def _show_about(self) -> None:
-        """バージョン情報ダイアログを表示する。"""
-        QtWidgets.QMessageBox.about(
-            self,
-            "バージョン情報",
-            "<h3>太陽電池と発光素子計測プログラム (OPVJVL)</h3>"
-            "<p>太陽電池(OPV)のJV測定および発光素子のJVL測定ソフトウェア</p>"
-            "<p>Ishii &amp; Fukagawa Lab (Chiba University)</p>",
-        )

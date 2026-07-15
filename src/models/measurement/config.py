@@ -29,6 +29,7 @@ class OPVConfig:
     sample_name: str = "sample"
     save_dir: str = "."
     channel: Literal["smua", "smub"] = "smua"
+    hysteresis: bool = False
 
     def build_voltage_list(self) -> np.ndarray:
         """Vmin〜Vmaxを刻み幅Vstepで生成し、各点をiteration回繰り返す。
@@ -36,10 +37,19 @@ class OPVConfig:
         既存コード`Keithley2400_OPV.py`は`np.ones`+`np.append`で同等の処理を
         行っているが、`np.repeat(base, iteration)`の方が等価かつ簡潔なため
         こちらを採用する。
+
+        ``hysteresis=True``の場合、往路(Vmin→Vmax)に続けて復路(Vmax→Vmin)を
+        連結した往復掃引の電圧列を生成する。復路は往路の反転(``base[::-1]``)
+        だが、折り返し点(Vmax)が往路の末尾・復路の先頭で重複しないよう
+        ``base[::-1][1:]``として先頭1点を除いてから連結する。iteration回の
+        繰り返しは、往復連結後の電圧列全体に対して適用する(各点を
+        iteration回連続測定する既存仕様を維持)。
         """
         # arangeは半開区間かつ浮動小数点数の丸め誤差の影響を受けやすいため、
         # v_step * 0.5 のマージンを加えることで v_max を確実に含むようにする。
         base = np.arange(self.v_min, self.v_max + self.v_step * 0.5, self.v_step)
+        if self.hysteresis:
+            base = np.concatenate([base, base[::-1][1:]])
         return np.repeat(base, self.iteration)
 
 
@@ -82,11 +92,20 @@ class ChannelConfig:
     delay_time: float = 1.0
     sample_name: str = "sample"
     hold_at_end: Literal["last_value", "zero"] = "last_value"
+    hysteresis: bool = False
 
     def build_voltage_list(self) -> np.ndarray:
+        """Vmin〜Vmaxを刻み幅Vstepで生成し、各点をiteration回繰り返す。
+
+        ``hysteresis=True``の場合、``OPVConfig.build_voltage_list``と同様に
+        往路(Vmin→Vmax)+復路(Vmax→Vmin、折り返し点を重複させない)を連結した
+        往復掃引の電圧列を生成してからiteration回の繰り返しを適用する。
+        """
         # arangeは半開区間かつ浮動小数点数の丸め誤差の影響を受けやすいため、
         # v_step * 0.5 のマージンを加えることで v_max を確実に含むようにする。
         base = np.arange(self.v_min, self.v_max + self.v_step * 0.5, self.v_step)
+        if self.hysteresis:
+            base = np.concatenate([base, base[::-1][1:]])
         return np.repeat(base, self.iteration)
 
 

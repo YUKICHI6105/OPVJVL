@@ -30,11 +30,11 @@ def _make_editable_combo(object_name: str, current_text: str) -> QtWidgets.QComb
 
 
 class DisplaySettingsDialog(QtWidgets.QDialog):
-    """グラフ描画スタイル(目盛フォント・線幅・シンボルサイズ・グリッド)の設定ダイアログ。
+    """グラフ描画スタイル(目盛フォント・線幅・シンボルサイズ・グリッド・凡例)の設定ダイアログ。
 
     EQEプロジェクト(``EQE/src/views/dialogs.py`` の ``DisplaySettingsDialog``)から移植。
-    OPVJVLに存在しない項目(凡例フォント・凡例表示等。OPVJVLのプロットは凡例を
-    持たない)は除外し、代わりにグリッド表示の切替を追加した。
+    グリッド表示の切替に加え、review.md指摘#6でJVLタブに凡例を追加したため、
+    凡例の表示/非表示・フォントサイズも設定できる。
     デフォルト値の唯一の正は ``views.theme.GRAPH_STYLE_DEFAULTS``。
     """
 
@@ -83,6 +83,21 @@ class DisplaySettingsDialog(QtWidgets.QDialog):
         )
         form_layout.addRow("グリッド表示:", self.showGridCheckBox)
 
+        self.showLegendCheckBox = QtWidgets.QCheckBox(
+            "凡例を表示する", objectName="graph_showLegendCheckBox"
+        )
+        self.showLegendCheckBox.setChecked(
+            bool(self.settings.get("graph_show_legend", defaults["graph_show_legend"]))
+        )
+        form_layout.addRow("凡例表示:", self.showLegendCheckBox)
+
+        self.legendFontSizeSpin = QtWidgets.QSpinBox(objectName="graph_legendFontSizeSpin")
+        self.legendFontSizeSpin.setRange(6, 24)
+        self.legendFontSizeSpin.setValue(
+            int(self.settings.get("graph_legend_font_size", defaults["graph_legend_font_size"]))
+        )
+        form_layout.addRow("凡例フォントサイズ (pt):", self.legendFontSizeSpin)
+
         layout.addLayout(form_layout)
 
         button_layout = QtWidgets.QHBoxLayout()
@@ -106,6 +121,8 @@ class DisplaySettingsDialog(QtWidgets.QDialog):
         self.lineWidthSpin.setValue(float(defaults["graph_line_width"]))
         self.symbolSizeSpin.setValue(int(defaults["graph_symbol_size"]))
         self.showGridCheckBox.setChecked(bool(defaults["graph_show_grid"]))
+        self.showLegendCheckBox.setChecked(bool(defaults["graph_show_legend"]))
+        self.legendFontSizeSpin.setValue(int(defaults["graph_legend_font_size"]))
 
     def get_settings(self) -> dict:
         return {
@@ -113,11 +130,19 @@ class DisplaySettingsDialog(QtWidgets.QDialog):
             "graph_line_width": self.lineWidthSpin.value(),
             "graph_symbol_size": self.symbolSizeSpin.value(),
             "graph_show_grid": self.showGridCheckBox.isChecked(),
+            "graph_show_legend": self.showLegendCheckBox.isChecked(),
+            "graph_legend_font_size": self.legendFontSizeSpin.value(),
         }
 
 
 class DeviceSettingsDialog(QtWidgets.QDialog):
-    """OPV/JVL/2ch活用モードA・Bの機器接続設定をまとめて編集するダイアログ。"""
+    """OPV/JVLモード・2ch活用モードの機器接続設定をまとめて編集するダイアログ。
+
+    実験室ではOPVモードとJVLモードは同一のソースメータを、2ch活用モードA/Bは
+    同一のKeithley2612Bを共用するため、設定は「OPV/JVLモード共通」
+    「2ch活用モード共通」の2グループに統合されている
+    (旧: OPV/JVL/2ch活用モードA/Bの4グループ)。
+    """
 
     def __init__(
         self,
@@ -139,10 +164,8 @@ class DeviceSettingsDialog(QtWidgets.QDialog):
     def _init_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
 
-        layout.addWidget(self._build_opv_group())
-        layout.addWidget(self._build_jvl_group())
-        layout.addWidget(self._build_dual_a_group())
-        layout.addWidget(self._build_dual_b_group())
+        layout.addWidget(self._build_opvjvl_group())
+        layout.addWidget(self._build_dual_group())
 
         button_layout = QtWidgets.QHBoxLayout()
         self.resetButton = QtWidgets.QPushButton("設定を初期化", objectName="resetButton")
@@ -159,184 +182,123 @@ class DeviceSettingsDialog(QtWidgets.QDialog):
         button_layout.addWidget(self.buttonBox)
         layout.addLayout(button_layout)
 
-    def _build_opv_group(self) -> QtWidgets.QGroupBox:
-        groupBox = QtWidgets.QGroupBox("OPVモード", objectName="opvGroupBox")
+    def _build_opvjvl_group(self) -> QtWidgets.QGroupBox:
+        """「OPV/JVLモード共通」グループを構築する。
+
+        実験室ではOPVモードとJVLモードは同一のソースメータを使うため、
+        機器選択・接続先・チャンネル・モック使用有無は1系統(opvjvl_*)に統合する。
+        輝度計(BM9)ポートはJVLモードの輝度測定でのみ使用するが、
+        グループ自体はOPV/JVL共通のためここに配置する。
+        """
+        groupBox = QtWidgets.QGroupBox("OPV/JVLモード共通", objectName="opvjvlGroupBox")
         formLayout = QtWidgets.QFormLayout(groupBox)
 
-        self.opv_deviceTypeCombo = QtWidgets.QComboBox(objectName="opv_deviceTypeCombo")
-        self.opv_deviceTypeCombo.addItems(_DEVICE_TYPE_ITEMS)
-        self.opv_deviceTypeCombo.setCurrentIndex(
-            self.settings.get("opv_device_type_index", DEFAULT_DEVICE_SETTINGS["opv_device_type_index"])
+        self.opvjvl_deviceTypeCombo = QtWidgets.QComboBox(objectName="opvjvl_deviceTypeCombo")
+        self.opvjvl_deviceTypeCombo.addItems(_DEVICE_TYPE_ITEMS)
+        self.opvjvl_deviceTypeCombo.setCurrentIndex(
+            self.settings.get(
+                "opvjvl_device_type_index", DEFAULT_DEVICE_SETTINGS["opvjvl_device_type_index"]
+            )
         )
-        formLayout.addRow("機器選択:", self.opv_deviceTypeCombo)
+        formLayout.addRow("機器選択:", self.opvjvl_deviceTypeCombo)
 
-        self.opv_connectionEdit = _make_editable_combo(
-            "opv_connectionEdit",
-            self.settings.get("opv_connection", DEFAULT_DEVICE_SETTINGS["opv_connection"]),
+        self.opvjvl_connectionEdit = _make_editable_combo(
+            "opvjvl_connectionEdit",
+            self.settings.get("opvjvl_connection", DEFAULT_DEVICE_SETTINGS["opvjvl_connection"]),
         )
-        self.opv_refreshButton = QtWidgets.QPushButton("再検索", objectName="opv_refreshButton")
-        self.opv_refreshButton.clicked.connect(
-            lambda: self._refresh_connection_combo(self.opv_connectionEdit, self.opv_deviceTypeCombo)
-        )
-        connectionRow = QtWidgets.QHBoxLayout()
-        connectionRow.addWidget(self.opv_connectionEdit)
-        connectionRow.addWidget(self.opv_refreshButton)
-        formLayout.addRow("接続先(COM/VISA):", connectionRow)
-
-        self.opv_channelCombo = QtWidgets.QComboBox(objectName="opv_channelCombo")
-        self.opv_channelCombo.addItems(_CHANNEL_ITEMS)
-        self.opv_channelCombo.setCurrentText(
-            self.settings.get("opv_channel", DEFAULT_DEVICE_SETTINGS["opv_channel"])
-        )
-        self.opv_channelLabel = QtWidgets.QLabel("チャンネル(2612B時のみ):")
-        formLayout.addRow(self.opv_channelLabel, self.opv_channelCombo)
-
-        self.opv_deviceTypeCombo.currentIndexChanged.connect(self._update_opv_channel_visibility)
-        self._update_opv_channel_visibility()
-
-        if self.developer_mode:
-            self.opv_useMockCheckBox = QtWidgets.QCheckBox(objectName="opv_useMockCheckBox")
-            self.opv_useMockCheckBox.setChecked(self.settings.get("opv_use_mock", False))
-            formLayout.addRow("モックを使用する(開発者モード):", self.opv_useMockCheckBox)
-
-        return groupBox
-
-    def _update_opv_channel_visibility(self) -> None:
-        is_2612b = self.opv_deviceTypeCombo.currentIndex() == 1
-        self.opv_channelLabel.setVisible(is_2612b)
-        self.opv_channelCombo.setVisible(is_2612b)
-
-    def _build_jvl_group(self) -> QtWidgets.QGroupBox:
-        groupBox = QtWidgets.QGroupBox("JVLモード", objectName="jvlGroupBox")
-        formLayout = QtWidgets.QFormLayout(groupBox)
-
-        self.jvl_deviceTypeCombo = QtWidgets.QComboBox(objectName="jvl_deviceTypeCombo")
-        self.jvl_deviceTypeCombo.addItems(_DEVICE_TYPE_ITEMS)
-        self.jvl_deviceTypeCombo.setCurrentIndex(
-            self.settings.get("jvl_device_type_index", DEFAULT_DEVICE_SETTINGS["jvl_device_type_index"])
-        )
-        formLayout.addRow("機器選択:", self.jvl_deviceTypeCombo)
-
-        self.jvl_connectionEdit = _make_editable_combo(
-            "jvl_connectionEdit",
-            self.settings.get("jvl_connection", DEFAULT_DEVICE_SETTINGS["jvl_connection"]),
-        )
-        self.jvl_refreshButton = QtWidgets.QPushButton("再検索", objectName="jvl_refreshButton")
-        self.jvl_refreshButton.clicked.connect(
-            lambda: self._refresh_connection_combo(self.jvl_connectionEdit, self.jvl_deviceTypeCombo)
+        self.opvjvl_refreshButton = QtWidgets.QPushButton("再検索", objectName="opvjvl_refreshButton")
+        self.opvjvl_refreshButton.clicked.connect(
+            lambda: self._refresh_connection_combo(
+                self.opvjvl_connectionEdit, self.opvjvl_deviceTypeCombo
+            )
         )
         connectionRow = QtWidgets.QHBoxLayout()
-        connectionRow.addWidget(self.jvl_connectionEdit)
-        connectionRow.addWidget(self.jvl_refreshButton)
+        connectionRow.addWidget(self.opvjvl_connectionEdit)
+        connectionRow.addWidget(self.opvjvl_refreshButton)
         formLayout.addRow("接続先(COM/VISA):", connectionRow)
 
-        self.jvl_bm9PortEdit = _make_editable_combo(
-            "jvl_bm9PortEdit",
-            self.settings.get("jvl_bm9_port", DEFAULT_DEVICE_SETTINGS["jvl_bm9_port"]),
+        self.opvjvl_channelCombo = QtWidgets.QComboBox(objectName="opvjvl_channelCombo")
+        self.opvjvl_channelCombo.addItems(_CHANNEL_ITEMS)
+        self.opvjvl_channelCombo.setCurrentText(
+            self.settings.get("opvjvl_channel", DEFAULT_DEVICE_SETTINGS["opvjvl_channel"])
         )
-        self.jvl_bm9RefreshButton = QtWidgets.QPushButton("再検索", objectName="jvl_bm9RefreshButton")
-        self.jvl_bm9RefreshButton.clicked.connect(
-            lambda: self._refresh_serial_combo(self.jvl_bm9PortEdit)
+        self.opvjvl_channelLabel = QtWidgets.QLabel("チャンネル(2612B時のみ):")
+        formLayout.addRow(self.opvjvl_channelLabel, self.opvjvl_channelCombo)
+
+        self.opvjvl_deviceTypeCombo.currentIndexChanged.connect(
+            self._update_opvjvl_channel_visibility
+        )
+        self._update_opvjvl_channel_visibility()
+
+        self.opvjvl_bm9PortEdit = _make_editable_combo(
+            "opvjvl_bm9PortEdit",
+            self.settings.get("opvjvl_bm9_port", DEFAULT_DEVICE_SETTINGS["opvjvl_bm9_port"]),
+        )
+        self.opvjvl_bm9RefreshButton = QtWidgets.QPushButton(
+            "再検索", objectName="opvjvl_bm9RefreshButton"
+        )
+        self.opvjvl_bm9RefreshButton.clicked.connect(
+            lambda: self._refresh_serial_combo(self.opvjvl_bm9PortEdit)
         )
         bm9Row = QtWidgets.QHBoxLayout()
-        bm9Row.addWidget(self.jvl_bm9PortEdit)
-        bm9Row.addWidget(self.jvl_bm9RefreshButton)
-        formLayout.addRow("輝度計(BM9)ポート:", bm9Row)
-
-        self.jvl_channelCombo = QtWidgets.QComboBox(objectName="jvl_channelCombo")
-        self.jvl_channelCombo.addItems(_CHANNEL_ITEMS)
-        self.jvl_channelCombo.setCurrentText(
-            self.settings.get("jvl_channel", DEFAULT_DEVICE_SETTINGS["jvl_channel"])
-        )
-        self.jvl_channelLabel = QtWidgets.QLabel("チャンネル(2612B時のみ):")
-        formLayout.addRow(self.jvl_channelLabel, self.jvl_channelCombo)
-
-        self.jvl_deviceTypeCombo.currentIndexChanged.connect(self._update_jvl_channel_visibility)
-        self._update_jvl_channel_visibility()
+        bm9Row.addWidget(self.opvjvl_bm9PortEdit)
+        bm9Row.addWidget(self.opvjvl_bm9RefreshButton)
+        formLayout.addRow("輝度計(BM9)ポート(JVL輝度測定用):", bm9Row)
 
         if self.developer_mode:
-            self.jvl_useMockCheckBox = QtWidgets.QCheckBox(objectName="jvl_useMockCheckBox")
-            self.jvl_useMockCheckBox.setChecked(self.settings.get("jvl_use_mock", False))
-            formLayout.addRow("モックを使用する(開発者モード):", self.jvl_useMockCheckBox)
+            self.opvjvl_useMockCheckBox = QtWidgets.QCheckBox(objectName="opvjvl_useMockCheckBox")
+            self.opvjvl_useMockCheckBox.setChecked(self.settings.get("opvjvl_use_mock", False))
+            formLayout.addRow("モックを使用する(開発者モード):", self.opvjvl_useMockCheckBox)
 
         return groupBox
 
-    def _update_jvl_channel_visibility(self) -> None:
-        is_2612b = self.jvl_deviceTypeCombo.currentIndex() == 1
-        self.jvl_channelLabel.setVisible(is_2612b)
-        self.jvl_channelCombo.setVisible(is_2612b)
+    def _update_opvjvl_channel_visibility(self) -> None:
+        is_2612b = self.opvjvl_deviceTypeCombo.currentIndex() == 1
+        self.opvjvl_channelLabel.setVisible(is_2612b)
+        self.opvjvl_channelCombo.setVisible(is_2612b)
 
-    def _build_dual_a_group(self) -> QtWidgets.QGroupBox:
-        groupBox = QtWidgets.QGroupBox("2ch活用モードA", objectName="dualAGroupBox")
+    def _build_dual_group(self) -> QtWidgets.QGroupBox:
+        """「2ch活用モード共通」グループを構築する。
+
+        2ch活用モードA・Bは同一のKeithley2612B(2チャンネル)を使うため、
+        接続先・輝度計ポート・モック使用有無は1系統(dual_*)に統合する。
+        機器はKeithley2612B固定のため機器選択コンボは持たない。
+        """
+        groupBox = QtWidgets.QGroupBox("2ch活用モード共通", objectName="dualGroupBox")
         formLayout = QtWidgets.QFormLayout(groupBox)
 
-        self.dual_a_connectionEdit = _make_editable_combo(
-            "dual_a_connectionEdit",
-            self.settings.get("dual_a_connection", DEFAULT_DEVICE_SETTINGS["dual_a_connection"]),
+        self.dual_connectionEdit = _make_editable_combo(
+            "dual_connectionEdit",
+            self.settings.get("dual_connection", DEFAULT_DEVICE_SETTINGS["dual_connection"]),
         )
-        self.dual_a_refreshButton = QtWidgets.QPushButton("再検索", objectName="dual_a_refreshButton")
-        self.dual_a_refreshButton.clicked.connect(
-            lambda: self._refresh_visa_combo(self.dual_a_connectionEdit)
+        self.dual_refreshButton = QtWidgets.QPushButton("再検索", objectName="dual_refreshButton")
+        self.dual_refreshButton.clicked.connect(
+            lambda: self._refresh_visa_combo(self.dual_connectionEdit)
         )
         connectionRow = QtWidgets.QHBoxLayout()
-        connectionRow.addWidget(self.dual_a_connectionEdit)
-        connectionRow.addWidget(self.dual_a_refreshButton)
+        connectionRow.addWidget(self.dual_connectionEdit)
+        connectionRow.addWidget(self.dual_refreshButton)
         formLayout.addRow("接続先(VISA、Keithley2612B固定):", connectionRow)
 
-        self.dual_a_bm9PortEdit = _make_editable_combo(
-            "dual_a_bm9PortEdit",
-            self.settings.get("dual_a_bm9_port", DEFAULT_DEVICE_SETTINGS["dual_a_bm9_port"]),
+        self.dual_bm9PortEdit = _make_editable_combo(
+            "dual_bm9PortEdit",
+            self.settings.get("dual_bm9_port", DEFAULT_DEVICE_SETTINGS["dual_bm9_port"]),
         )
-        self.dual_a_bm9RefreshButton = QtWidgets.QPushButton("再検索", objectName="dual_a_bm9RefreshButton")
-        self.dual_a_bm9RefreshButton.clicked.connect(
-            lambda: self._refresh_serial_combo(self.dual_a_bm9PortEdit)
+        self.dual_bm9RefreshButton = QtWidgets.QPushButton(
+            "再検索", objectName="dual_bm9RefreshButton"
+        )
+        self.dual_bm9RefreshButton.clicked.connect(
+            lambda: self._refresh_serial_combo(self.dual_bm9PortEdit)
         )
         bm9Row = QtWidgets.QHBoxLayout()
-        bm9Row.addWidget(self.dual_a_bm9PortEdit)
-        bm9Row.addWidget(self.dual_a_bm9RefreshButton)
+        bm9Row.addWidget(self.dual_bm9PortEdit)
+        bm9Row.addWidget(self.dual_bm9RefreshButton)
         formLayout.addRow("輝度計(BM9)ポート:", bm9Row)
 
         if self.developer_mode:
-            self.dual_a_useMockCheckBox = QtWidgets.QCheckBox(objectName="dual_a_useMockCheckBox")
-            self.dual_a_useMockCheckBox.setChecked(self.settings.get("dual_a_use_mock", False))
-            formLayout.addRow("モックを使用する(開発者モード):", self.dual_a_useMockCheckBox)
-
-        return groupBox
-
-    def _build_dual_b_group(self) -> QtWidgets.QGroupBox:
-        groupBox = QtWidgets.QGroupBox("2ch活用モードB", objectName="dualBGroupBox")
-        formLayout = QtWidgets.QFormLayout(groupBox)
-
-        self.dual_b_connectionEdit = _make_editable_combo(
-            "dual_b_connectionEdit",
-            self.settings.get("dual_b_connection", DEFAULT_DEVICE_SETTINGS["dual_b_connection"]),
-        )
-        self.dual_b_refreshButton = QtWidgets.QPushButton("再検索", objectName="dual_b_refreshButton")
-        self.dual_b_refreshButton.clicked.connect(
-            lambda: self._refresh_visa_combo(self.dual_b_connectionEdit)
-        )
-        connectionRow = QtWidgets.QHBoxLayout()
-        connectionRow.addWidget(self.dual_b_connectionEdit)
-        connectionRow.addWidget(self.dual_b_refreshButton)
-        formLayout.addRow("接続先(VISA、チャンネルA/B共通):", connectionRow)
-
-        self.dual_b_bm9PortEdit = _make_editable_combo(
-            "dual_b_bm9PortEdit",
-            self.settings.get("dual_b_bm9_port", DEFAULT_DEVICE_SETTINGS["dual_b_bm9_port"]),
-        )
-        self.dual_b_bm9RefreshButton = QtWidgets.QPushButton("再検索", objectName="dual_b_bm9RefreshButton")
-        self.dual_b_bm9RefreshButton.clicked.connect(
-            lambda: self._refresh_serial_combo(self.dual_b_bm9PortEdit)
-        )
-        bm9Row = QtWidgets.QHBoxLayout()
-        bm9Row.addWidget(self.dual_b_bm9PortEdit)
-        bm9Row.addWidget(self.dual_b_bm9RefreshButton)
-        formLayout.addRow("輝度計(BM9)ポート:", bm9Row)
-
-        if self.developer_mode:
-            self.dual_b_useMockCheckBox = QtWidgets.QCheckBox(objectName="dual_b_useMockCheckBox")
-            self.dual_b_useMockCheckBox.setChecked(self.settings.get("dual_b_use_mock", False))
-            formLayout.addRow("モックを使用する(開発者モード):", self.dual_b_useMockCheckBox)
+            self.dual_useMockCheckBox = QtWidgets.QCheckBox(objectName="dual_useMockCheckBox")
+            self.dual_useMockCheckBox.setChecked(self.settings.get("dual_use_mock", False))
+            formLayout.addRow("モックを使用する(開発者モード):", self.dual_useMockCheckBox)
 
         return groupBox
 
@@ -382,60 +344,36 @@ class DeviceSettingsDialog(QtWidgets.QDialog):
     # 初期化 / 値取得
     # ------------------------------------------------------------------
     def reset_to_defaults(self) -> None:
-        self.opv_deviceTypeCombo.setCurrentIndex(DEFAULT_DEVICE_SETTINGS["opv_device_type_index"])
-        self.opv_connectionEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["opv_connection"])
-        self.opv_channelCombo.setCurrentText(DEFAULT_DEVICE_SETTINGS["opv_channel"])
-        if hasattr(self, "opv_useMockCheckBox"):
-            self.opv_useMockCheckBox.setChecked(DEFAULT_DEVICE_SETTINGS["opv_use_mock"])
+        self.opvjvl_deviceTypeCombo.setCurrentIndex(
+            DEFAULT_DEVICE_SETTINGS["opvjvl_device_type_index"]
+        )
+        self.opvjvl_connectionEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["opvjvl_connection"])
+        self.opvjvl_channelCombo.setCurrentText(DEFAULT_DEVICE_SETTINGS["opvjvl_channel"])
+        self.opvjvl_bm9PortEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["opvjvl_bm9_port"])
+        if hasattr(self, "opvjvl_useMockCheckBox"):
+            self.opvjvl_useMockCheckBox.setChecked(DEFAULT_DEVICE_SETTINGS["opvjvl_use_mock"])
 
-        self.jvl_deviceTypeCombo.setCurrentIndex(DEFAULT_DEVICE_SETTINGS["jvl_device_type_index"])
-        self.jvl_connectionEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["jvl_connection"])
-        self.jvl_bm9PortEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["jvl_bm9_port"])
-        self.jvl_channelCombo.setCurrentText(DEFAULT_DEVICE_SETTINGS["jvl_channel"])
-        if hasattr(self, "jvl_useMockCheckBox"):
-            self.jvl_useMockCheckBox.setChecked(DEFAULT_DEVICE_SETTINGS["jvl_use_mock"])
-
-        self.dual_a_connectionEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["dual_a_connection"])
-        self.dual_a_bm9PortEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["dual_a_bm9_port"])
-        if hasattr(self, "dual_a_useMockCheckBox"):
-            self.dual_a_useMockCheckBox.setChecked(DEFAULT_DEVICE_SETTINGS["dual_a_use_mock"])
-
-        self.dual_b_connectionEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["dual_b_connection"])
-        self.dual_b_bm9PortEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["dual_b_bm9_port"])
-        if hasattr(self, "dual_b_useMockCheckBox"):
-            self.dual_b_useMockCheckBox.setChecked(DEFAULT_DEVICE_SETTINGS["dual_b_use_mock"])
+        self.dual_connectionEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["dual_connection"])
+        self.dual_bm9PortEdit.setCurrentText(DEFAULT_DEVICE_SETTINGS["dual_bm9_port"])
+        if hasattr(self, "dual_useMockCheckBox"):
+            self.dual_useMockCheckBox.setChecked(DEFAULT_DEVICE_SETTINGS["dual_use_mock"])
 
     def get_settings(self) -> dict:
         return {
-            "opv_device_type_index": self.opv_deviceTypeCombo.currentIndex(),
-            "opv_connection": self.opv_connectionEdit.currentText().strip(),
-            "opv_channel": self.opv_channelCombo.currentText(),
-            "opv_use_mock": (
-                self.opv_useMockCheckBox.isChecked()
-                if hasattr(self, "opv_useMockCheckBox")
-                else self.settings.get("opv_use_mock", False)
+            "opvjvl_device_type_index": self.opvjvl_deviceTypeCombo.currentIndex(),
+            "opvjvl_connection": self.opvjvl_connectionEdit.currentText().strip(),
+            "opvjvl_channel": self.opvjvl_channelCombo.currentText(),
+            "opvjvl_bm9_port": self.opvjvl_bm9PortEdit.currentText().strip(),
+            "opvjvl_use_mock": (
+                self.opvjvl_useMockCheckBox.isChecked()
+                if hasattr(self, "opvjvl_useMockCheckBox")
+                else self.settings.get("opvjvl_use_mock", False)
             ),
-            "jvl_device_type_index": self.jvl_deviceTypeCombo.currentIndex(),
-            "jvl_connection": self.jvl_connectionEdit.currentText().strip(),
-            "jvl_bm9_port": self.jvl_bm9PortEdit.currentText().strip(),
-            "jvl_channel": self.jvl_channelCombo.currentText(),
-            "jvl_use_mock": (
-                self.jvl_useMockCheckBox.isChecked()
-                if hasattr(self, "jvl_useMockCheckBox")
-                else self.settings.get("jvl_use_mock", False)
-            ),
-            "dual_a_connection": self.dual_a_connectionEdit.currentText().strip(),
-            "dual_a_bm9_port": self.dual_a_bm9PortEdit.currentText().strip(),
-            "dual_a_use_mock": (
-                self.dual_a_useMockCheckBox.isChecked()
-                if hasattr(self, "dual_a_useMockCheckBox")
-                else self.settings.get("dual_a_use_mock", False)
-            ),
-            "dual_b_connection": self.dual_b_connectionEdit.currentText().strip(),
-            "dual_b_bm9_port": self.dual_b_bm9PortEdit.currentText().strip(),
-            "dual_b_use_mock": (
-                self.dual_b_useMockCheckBox.isChecked()
-                if hasattr(self, "dual_b_useMockCheckBox")
-                else self.settings.get("dual_b_use_mock", False)
+            "dual_connection": self.dual_connectionEdit.currentText().strip(),
+            "dual_bm9_port": self.dual_bm9PortEdit.currentText().strip(),
+            "dual_use_mock": (
+                self.dual_useMockCheckBox.isChecked()
+                if hasattr(self, "dual_useMockCheckBox")
+                else self.settings.get("dual_use_mock", False)
             ),
         }

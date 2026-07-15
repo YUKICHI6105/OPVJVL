@@ -44,15 +44,18 @@ def dual_b_meta_json_filename(sample_name: str) -> str:
 # --- CSV書き込み -----------------------------------------------------------
 
 
-def _write_csv(
+def save_points_csv(
     points: Sequence[Union[IVPoint, IVLPoint, ChannelPoint]],
+    path: Union[str, Path],
     include_luminance: bool,
-    save_dir: str,
-    filename: str,
 ) -> str:
-    directory = Path(save_dir)
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / filename
+    """測定点列を明示的なパスへCSV保存する(公開API)。
+
+    「別名保存」等、保存先ディレクトリ+ファイル名の組み立てをView側が
+    既に済ませている場合に使う。親ディレクトリが存在しなければ作成する。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     headers = ["voltage [V]", "current [A]"]
     if include_luminance:
@@ -68,6 +71,15 @@ def _write_csv(
             writer.writerow(row)
 
     return str(path)
+
+
+def _write_csv(
+    points: Sequence[Union[IVPoint, IVLPoint, ChannelPoint]],
+    include_luminance: bool,
+    save_dir: str,
+    filename: str,
+) -> str:
+    return save_points_csv(points, Path(save_dir) / filename, include_luminance)
 
 
 # --- 保存関数 ---------------------------------------------------------------

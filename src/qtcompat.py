@@ -22,15 +22,16 @@ os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
 
 try:
     from PyQt6 import QtCore, QtGui, QtWidgets, uic
-    from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
-    from PyQt6.QtGui import QAction
+    from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
+    from PyQt6.QtGui import QAction, QKeySequence, QShortcut
     from PyQt6.QtWidgets import QApplication
 
     QT_API = "PyQt6"
 except ImportError:
     from PyQt5 import QtCore, QtGui, QtWidgets, uic
-    from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
-    from PyQt5.QtWidgets import QAction, QApplication
+    from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
+    from PyQt5.QtGui import QKeySequence
+    from PyQt5.QtWidgets import QAction, QApplication, QShortcut
 
     QT_API = "PyQt5"
 
@@ -43,9 +44,12 @@ __all__ = [
     "QT_API",
     "QAction",
     "QApplication",
+    "QKeySequence",
     "QObject",
+    "QShortcut",
     "Qt",
     "QThread",
+    "QTimer",
     "QtCore",
     "QtGui",
     "QtWidgets",

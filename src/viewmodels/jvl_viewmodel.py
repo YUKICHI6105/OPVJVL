@@ -114,6 +114,18 @@ class JVLViewModel(QObject):
         if self._worker is not None:
             self._worker.request_stop()
 
+    def stop_and_wait(self, timeout_ms: int = 3000) -> None:
+        """アプリ終了時(MainWindow.closeEvent)専用の同期的停止API(review.md項目3)。
+
+        実行中のworkerへ協調的中断を要求し、``QThread.wait()``で猶予を与えることで、
+        workerの``finally``節(機器の出力OFF・close())が走り切る時間を確保する。
+        タイムアウトしても例外は出さず終了処理を継続させる。
+        """
+        worker = self._worker
+        if worker is not None and worker.isRunning():
+            worker.request_stop()
+            worker.wait(timeout_ms)
+
     # ------------------------------------------------------------------
     # Workerシグナルハンドラ
     # ------------------------------------------------------------------

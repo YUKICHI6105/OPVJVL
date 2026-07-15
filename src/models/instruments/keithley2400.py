@@ -26,7 +26,7 @@ class Keithley2400(AbstractSourceMeter):
         self.timeout = timeout
         self.ser: Optional[serial.Serial] = None
 
-    def connect(self, timeout_ms: int = 30000) -> str:
+    def connect(self, timeout_ms: int = 5000) -> str:
         self.timeout = timeout_ms / 1000.0
         try:
             self.ser = serial.Serial(
@@ -73,11 +73,34 @@ class Keithley2400(AbstractSourceMeter):
             raise InstrumentError(f"Keithley2400への書き込みに失敗しました: {e}") from e
 
     def _read(self) -> str:
+        """応答を1バイトずつ読み進め、CR(\\r)またはLF(\\n)を終端として返す。
+
+        実機の応答終端はRS-232設定(GPIB/Terminatorメニュー等)に依存し、
+        LFではなくCRのみの場合がある。``ser.readline()``はLF待ちのため、
+        CR終端の実機ではLFが来るまでタイムアウト満了までブロックし続け、
+        満了後にバッファ内容を返してしまう(見かけ上成功するが1点あたり
+        タイムアウト秒数分の遅延が発生する)。これを避けるため、CR/LFの
+        いずれかを検出した時点で即座に確定する。応答本体が空のまま
+        タイムアウトした場合は従来通りInstrumentErrorとする。
+        """
         self._require_connection()
+        buf = bytearray()
         try:
-            data = self.ser.readline().decode("ascii").strip()
+            while True:
+                b = self.ser.read(1)
+                if not b:
+                    # タイムアウト(読み取り0バイト)。
+                    break
+                if b in (b"\r", b"\n"):
+                    if buf:
+                        # 応答本体を確定済みなら、そこで終端。
+                        break
+                    # 先頭に残っていた前回応答の終端文字は読み飛ばす。
+                    continue
+                buf += b
         except serial.SerialException as e:
             raise InstrumentError(f"Keithley2400からの読み取りに失敗しました: {e}") from e
+        data = buf.decode("ascii").strip()
         if not data:
             raise InstrumentError("Keithley2400からの応答がありません(タイムアウト)。")
         return data

@@ -5,13 +5,17 @@ B-6-2節「OPVタブ（opv_tab.ui）階層」のウィジェットツリー・ob
 """
 from __future__ import annotations
 
+import os
+
 import pyqtgraph as pg
 
 from qtcompat import QtWidgets
 from models.measurement.config import OPVConfig
+from models.measurement.csv_writer import opv_csv_filename, save_points_csv
 from viewmodels.opv_viewmodel import OPVViewModel
 from views import tab_layout
-from views.plot_buffer import PlotBuffer
+from views.plot_buffer import PlotBuffer, install_auto_range_menu, set_iv_axis_labels
+from views.save_confirm import confirm_overwrite
 
 
 class OPVTab(QtWidgets.QWidget):
@@ -35,6 +39,7 @@ class OPVTab(QtWidgets.QWidget):
         self._connection = ""
         self._channel = "smua"
         self._use_mock = False
+        self._last_result = None  # (points, include_luminance) 最後に完了/中断した測定結果
         self._build_ui()
 
         # ViewModelの保持と結線(結線はView側の責務。__init__から一度だけ行う)
@@ -62,7 +67,10 @@ class OPVTab(QtWidgets.QWidget):
         """共通レイアウトビルダー(views/tab_layout.py)でタブを構築する。
 
         JVLタブと同一のコードパスを通すことで、レイアウト差の発生を
-        構造的に防ぐ(review.md指摘#3)。
+        構造的に防ぐ(review.md指摘#3)。左右分割はメインウィンドウ直下の
+        QSplitterが担うため(review.md指摘#1)、このタブ自身は設定カラムの
+        中身だけを持ち、表示パネル/ログはMainWindowへ``display_panel()``/
+        ``log_widget()``経由で渡す。
         """
         # 測定設定グループ(OPV固有の初期値のみ指定。行構成はJVLと共通)
         opv_measurementGroupBox, measurement_widgets = tab_layout.build_measurement_group(
@@ -76,6 +84,7 @@ class OPVTab(QtWidgets.QWidget):
         self.opv_nplcSpin = measurement_widgets["nplc"]
         self.opv_delaySpin = measurement_widgets["delay"]
         self.opv_complianceSpin = measurement_widgets["compliance"]
+        self.opv_hysteresisCheckBox = measurement_widgets["hysteresis"]
 
         # 保存・実行グループ
         opv_saveRunGroupBox, save_run_widgets = tab_layout.build_save_run_group(
@@ -96,16 +105,25 @@ class OPVTab(QtWidgets.QWidget):
         self.opv_progressBar.setValue(0)
         self.opv_plotWidget = pg.PlotWidget()
         self.opv_plotWidget.setObjectName("opv_plotWidget")
+        set_iv_axis_labels(self.opv_plotWidget)
+        install_auto_range_menu(self.opv_plotWidget)
         self.opv_logTextEdit = QtWidgets.QTextEdit(objectName="opv_logTextEdit")
+        self.opv_logTextEdit.setReadOnly(True)
 
-        tab_layout.build_split_tab(
-            self,
-            "opv",
-            settings_groups=[opv_measurementGroupBox, opv_saveRunGroupBox],
-            display_widget=self.opv_plotWidget,
-            log_text_edit=self.opv_logTextEdit,
-            progress_bar=self.opv_progressBar,
+        tab_layout.build_settings_column(
+            self, "opv", settings_groups=[opv_measurementGroupBox, opv_saveRunGroupBox]
         )
+        self._display_panel = tab_layout.build_display_panel(
+            "opv", self.opv_plotWidget, self.opv_progressBar
+        )
+
+    def display_panel(self) -> QtWidgets.QWidget:
+        """MainWindow右カラム(displayStack)に積む表示パネル(進捗バー+グラフ)。"""
+        return self._display_panel
+
+    def log_widget(self) -> QtWidgets.QWidget:
+        """MainWindow左カラムの「ログ」グループ(logStack)に積むログ表示。"""
+        return self.opv_logTextEdit
 
     def plot_widgets(self) -> list:
         """このタブが保有する全プロットウィジェット(グラフ表示設定の適用対象)。"""
@@ -138,6 +156,7 @@ class OPVTab(QtWidgets.QWidget):
             sample_name=self.opv_sampleNameEdit.text().strip() or "sample",
             save_dir=self.opv_saveDirEdit.text().strip() or ".",
             channel=self._channel,
+            hysteresis=self.opv_hysteresisCheckBox.isChecked(),
         )
 
     # ------------------------------------------------------------------
@@ -145,6 +164,9 @@ class OPVTab(QtWidgets.QWidget):
     # ------------------------------------------------------------------
     def _on_start_clicked(self) -> None:
         config = self._build_config()
+        planned_path = os.path.join(config.save_dir, opv_csv_filename(config.sample_name))
+        if not confirm_overwrite(self, [planned_path]):
+            return
         total_points = len(config.build_voltage_list())
         self.opv_progressBar.setMaximum(max(total_points, 1))
         self.opv_progressBar.setValue(0)
@@ -160,6 +182,7 @@ class OPVTab(QtWidgets.QWidget):
     def _on_running_changed(self, running: bool) -> None:
         self.opv_startButton.setEnabled(not running)
         self.opv_stopButton.setEnabled(running)
+        self.opv_hysteresisCheckBox.setEnabled(not running)
 
     def _on_point_measured(self, point) -> None:
         if self._plot_buffer is not None:
@@ -175,7 +198,29 @@ class OPVTab(QtWidgets.QWidget):
         QtWidgets.QMessageBox.warning(self, "入力エラー", message)
 
     def _on_finished_ok(self, points: list, csv_path: str, aborted: bool) -> None:
-        pass
+        self._last_result = (points, False)
+
+    # ------------------------------------------------------------------
+    # 別名保存(ファイルメニュー「測定データを別名保存...」/Ctrl+S)
+    # ------------------------------------------------------------------
+    def save_last_result_as(self, parent=None) -> None:
+        """最後に完了/中断した測定結果を任意のファイル名でCSV保存する。"""
+        if not self._last_result:
+            QtWidgets.QMessageBox.information(
+                parent or self, "情報", "保存できる測定結果がありません。"
+            )
+            return
+        points, include_luminance = self._last_result
+        sample_name = self.opv_sampleNameEdit.text().strip() or "sample"
+        save_dir = self.opv_saveDirEdit.text().strip() or "."
+        default_path = os.path.join(save_dir, opv_csv_filename(sample_name))
+        path, _filter = QtWidgets.QFileDialog.getSaveFileName(
+            parent or self, "測定データを別名保存", default_path, "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+        save_points_csv(points, path, include_luminance)
+        self._append_log(f"測定データを保存しました: {path}")
 
     # ------------------------------------------------------------------
     # 設定の永続化(MainWindowが起動時restore/終了時saveに使用)
@@ -193,6 +238,7 @@ class OPVTab(QtWidgets.QWidget):
             "opv_nplc": self.opv_nplcSpin,
             "opv_delay": self.opv_delaySpin,
             "opv_compliance": self.opv_complianceSpin,
+            "opv_hysteresis": self.opv_hysteresisCheckBox,
         }
 
     def _on_browse_save_dir(self) -> None:

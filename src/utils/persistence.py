@@ -26,22 +26,20 @@ logger = get_logger("persistence")
 # -----------------------------------------------------------------------
 
 #: 機器接続設定のデフォルト(機器設定ダイアログ ``DeviceSettingsDialog`` が扱うキー)
+#:
+#: OPVモードとJVLモードは実験室では同一のソースメータを、2ch活用モードAとBは
+#: 同一のKeithley2612Bを使うため、設定は「OPV/JVL共通」「2ch活用共通」の2系統に
+#: 統合されている(旧: opv_*/jvl_*/dual_a_*/dual_b_* の4系統)。
+#: 旧settings.jsonからの移行は ``utils.device_settings.load_device_settings`` が行う。
 DEVICE_SETTINGS_DEFAULTS: dict = {
-    "opv_device_type_index": 0,  # 0=Keithley2400, 1=Keithley2612B
-    "opv_connection": "COM5",
-    "opv_channel": "smua",
-    "jvl_device_type_index": 0,
-    "jvl_connection": "COM5",
-    "jvl_channel": "smua",
-    "jvl_bm9_port": "COM4",
-    "dual_a_connection": "",
-    "dual_a_bm9_port": "COM4",
-    "dual_b_connection": "",
-    "dual_b_bm9_port": "COM4",
-    "opv_use_mock": False,
-    "jvl_use_mock": False,
-    "dual_a_use_mock": False,
-    "dual_b_use_mock": False,
+    "opvjvl_device_type_index": 0,  # 0=Keithley2400, 1=Keithley2612B
+    "opvjvl_connection": "COM5",
+    "opvjvl_channel": "smua",
+    "opvjvl_bm9_port": "COM4",
+    "opvjvl_use_mock": False,
+    "dual_connection": "",
+    "dual_bm9_port": "COM4",
+    "dual_use_mock": False,
 }
 
 #: 測定パラメータ・共通保存設定のデフォルト(各タブのウィジェット初期値と一致させる)
@@ -57,6 +55,7 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
     "opv_nplc": 1.0,
     "opv_delay": 1.0,
     "opv_compliance": 0.02,
+    "opv_hysteresis": False,
     # --- JVLモード ---
     "jvl_v_min": -1.0,
     "jvl_v_max": 1.9,
@@ -66,6 +65,7 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
     "jvl_delay": 1.0,
     "jvl_compliance": 0.02,
     "jvl_use_luminance": True,
+    "jvl_hysteresis": False,
     # --- 2ch活用モードA ---
     "dual_a_device_mode": "太陽電池",
     "dual_a_v_min": -0.1,
@@ -75,6 +75,7 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
     "dual_a_nplc": 1.0,
     "dual_a_delay": 1.0,
     "dual_a_compliance": 0.02,
+    "dual_a_hysteresis": False,
     # --- 2ch活用モードB(共通) ---
     "dual_b_save_dir": "",
     # --- 2ch活用モードB チャンネルA ---
@@ -88,6 +89,7 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
     "dual_chA_delay": 1.0,
     "dual_chA_use_bm9": False,
     "dual_chA_sample_name": "",
+    "dual_chA_hysteresis": False,
     # --- 2ch活用モードB チャンネルB ---
     "dual_chB_enabled": False,
     "dual_chB_device_mode": "太陽電池",
@@ -99,6 +101,7 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
     "dual_chB_delay": 1.0,
     "dual_chB_use_bm9": False,
     "dual_chB_sample_name": "",
+    "dual_chB_hysteresis": False,
 }
 
 #: settings.json 全体のデフォルト
@@ -145,6 +148,28 @@ def load_settings() -> dict:
         except (OSError, ValueError) as e:
             logger.error("settings.json の読み込みに失敗しました(デフォルト値で続行): %s", e)
     return merged
+
+
+def load_raw_settings() -> dict:
+    """settings.json の生の内容を、デフォルト値とのマージなしで返す。
+
+    ``load_settings`` はデフォルトとマージ済みの辞書を返すため、
+    「ファイルに実際に書かれているキーか否か」を判別できない。
+    旧キー→新キーの移行判定(``utils.device_settings.load_device_settings``)など、
+    生の内容を参照したい用途向けの小さなヘルパー。
+    ファイルが存在しない・壊れている場合は空辞書を返す。
+    """
+    settings_file = get_settings_path()
+    if not os.path.exists(settings_file):
+        return {}
+    try:
+        with open(settings_file, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            return loaded
+    except (OSError, ValueError) as e:
+        logger.error("settings.json の読み込みに失敗しました(デフォルト値で続行): %s", e)
+    return {}
 
 
 def save_settings(settings_dict: dict) -> None:

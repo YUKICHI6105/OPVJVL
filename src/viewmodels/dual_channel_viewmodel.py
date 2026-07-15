@@ -116,6 +116,18 @@ class DualChannelViewModel(QObject):
         if self._worker_a is not None:
             self._worker_a.request_stop()
 
+    def stop_and_wait_a(self, timeout_ms: int = 3000) -> None:
+        """アプリ終了時(MainWindow.closeEvent)専用の同期的停止API(review.md項目3)。
+
+        実行中のモードAworkerへ協調的中断を要求し、``QThread.wait()``で猶予を
+        与えることで、workerの``finally``節(機器の出力OFF・close())が
+        走り切る時間を確保する。タイムアウトしても例外は出さず終了処理を継続させる。
+        """
+        worker = self._worker_a
+        if worker is not None and worker.isRunning():
+            worker.request_stop()
+            worker.wait(timeout_ms)
+
     def _on_mode_a_point_measured(self, point) -> None:
         self.point_measured_a.emit(point)
         luminance = getattr(point, "luminance", None)
@@ -258,6 +270,18 @@ class DualChannelViewModel(QObject):
     def stop_mode_b(self) -> None:
         if self._worker_b is not None:
             self._worker_b.request_stop()
+
+    def stop_and_wait_b(self, timeout_ms: int = 3000) -> None:
+        """アプリ終了時(MainWindow.closeEvent)専用の同期的停止API(review.md項目3)。
+
+        実行中のモードBworkerへ協調的中断を要求し、``QThread.wait()``で猶予を
+        与えることで、workerの``finally``節(機器の出力OFF・close())が
+        走り切る時間を確保する。タイムアウトしても例外は出さず終了処理を継続させる。
+        """
+        worker = self._worker_b
+        if worker is not None and worker.isRunning():
+            worker.request_stop()
+            worker.wait(timeout_ms)
 
     def _save_mode_b_results(
         self,

@@ -39,9 +39,11 @@ def test_run_opv_sequence_success():
     assert points[5].index == 5
     assert points[5].voltage == pytest.approx(0.1)
 
-    # sleep関数の呼び出し回数
-    assert len(sleep_calls) == 6
-    assert sleep_calls[0] == 0.5
+    # 中断即応化のため、delay_timeは0.1秒単位に分割してsleep_fnへ渡される。
+    # 呼び出し回数は分割の実装詳細に依存するため、合計待機時間(6点 x 0.5秒)
+    # が変わっていないことを検証する。
+    assert sum(sleep_calls) == pytest.approx(0.5 * 6)
+    assert all(c <= 0.5 + 1e-9 for c in sleep_calls)
 
     # 測定完了後、出力がOFFになっていることを検証
     assert smu.connected
@@ -63,13 +65,25 @@ def test_run_opv_sequence_aborted():
     smu = Keithley2400Mock(connection="MOCK")
     smu.connect()
 
-    # 3点目 (index=2) の後に中断フラグを立てる
-    call_count = 0
+    # 3点目 (index=2) の測定完了後に中断フラグを立てる。
+    # is_aborted()は待機の分割(_interruptible_sleep)により1点あたり複数回
+    # 呼ばれるため、呼び出し回数ではなく「3点測定し終えたか」で判定する。
+    measured_count = 0
+    aborted = False
+    original_measure_current = smu.measure_current
+
+    def measure_current(channel):
+        nonlocal measured_count, aborted
+        value = original_measure_current(channel)
+        measured_count += 1
+        if measured_count >= 3:
+            aborted = True
+        return value
+
+    smu.measure_current = measure_current
 
     def is_aborted():
-        nonlocal call_count
-        call_count += 1
-        return call_count > 3
+        return aborted
 
     points = list(run_opv_sequence(smu, config, is_aborted, sleep_fn=lambda x: None))
 

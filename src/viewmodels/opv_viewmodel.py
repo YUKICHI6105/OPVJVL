@@ -95,6 +95,21 @@ class OPVViewModel(QObject):
         if self._worker is not None:
             self._worker.request_stop()
 
+    def stop_and_wait(self, timeout_ms: int = 3000) -> None:
+        """アプリ終了時(MainWindow.closeEvent)専用の同期的停止API(review.md項目3)。
+
+        実行中のworkerへ協調的中断(``request_stop``)を要求し、``QThread.wait()``で
+        猶予を与えることで、workerの``finally``節(機器の出力OFF・close())が
+        走り切る時間を確保する。GUIスレッドを一時的にブロックするため、
+        アプリ終了時以外(通常の中断操作)には使わないこと。
+        タイムアウトしても例外は出さず、そのまま終了処理を継続させる
+        (厳密なjoin保証までは不要という要件のため)。
+        """
+        worker = self._worker
+        if worker is not None and worker.isRunning():
+            worker.request_stop()
+            worker.wait(timeout_ms)
+
     # ------------------------------------------------------------------
     # Workerシグナルハンドラ
     # ------------------------------------------------------------------
