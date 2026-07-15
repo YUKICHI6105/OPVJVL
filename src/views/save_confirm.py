@@ -1,8 +1,9 @@
-"""測定開始前の「上書き保存」確認ダイアログ(共有ヘルパー)。
+"""測定開始前の「保存先確認」「上書き保存」確認ダイアログ(共有ヘルパー)。
 
 各タブの開始クリックハンドラは、ViewModelのstart呼び出し前に本モジュールの
-``confirm_overwrite`` を呼び、保存予定のCSVパスが既に存在する場合のみ
-確認ダイアログを表示する。Qt依存のためView層に置く(csv_writerはQt非依存を維持)。
+``ensure_save_dir``(review.md項目3)→``confirm_overwrite`` の順に呼び、
+保存先が未指定なら指定を促し、保存予定のCSVパスが既に存在する場合のみ
+上書き確認ダイアログを表示する。Qt依存のためView層に置く(csv_writerはQt非依存を維持)。
 """
 from __future__ import annotations
 
@@ -10,6 +11,36 @@ import os
 from typing import Sequence
 
 from qtcompat import QtWidgets, enum_value
+
+
+def ensure_save_dir(parent, save_dir_edit: QtWidgets.QLineEdit) -> bool:
+    """保存先が空欄なら選択を促す(review.md項目3)。
+
+    ``save_dir_edit`` のテキスト(前後空白除去後)が空の場合、
+    ``QFileDialog.getExistingDirectory`` でディレクトリ選択ダイアログを開く。
+    選択されればそのパスを ``save_dir_edit`` へ ``setText`` してTrueを返す。
+    キャンセルされた場合は「保存先を指定してください」の情報ダイアログを出して
+    Falseを返す(測定を開始しない)。
+
+    空でなければダイアログを出さず即Trueを返す。
+
+    Args:
+        parent: ダイアログの親ウィジェット。
+        save_dir_edit: 保存先ディレクトリを保持する``QLineEdit``。
+
+    Returns:
+        測定開始を続行してよければTrue、中止すべきならFalse。
+    """
+    if save_dir_edit.text().strip():
+        return True
+
+    directory = QtWidgets.QFileDialog.getExistingDirectory(parent, "保存先ディレクトリを選択")
+    if directory:
+        save_dir_edit.setText(directory)
+        return True
+
+    QtWidgets.QMessageBox.information(parent, "保存先未指定", "保存先を指定してください")
+    return False
 
 
 def confirm_overwrite(parent, paths: Sequence[str]) -> bool:

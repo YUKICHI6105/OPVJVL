@@ -25,7 +25,7 @@ from views.plot_buffer import (
     set_iv_axis_labels,
     setup_luminance_axis,
 )
-from views.save_confirm import confirm_overwrite
+from views.save_confirm import confirm_overwrite, ensure_save_dir
 from views.tab_layout import make_double_spin as _make_double_spin
 
 DEVICE_MODE_ITEMS = ["太陽電池", "発光素子"]
@@ -534,6 +534,8 @@ class DualChannelTab(QtWidgets.QWidget):
     # イベントハンドラ
     # ------------------------------------------------------------------
     def _on_mode_a_start_clicked(self) -> None:
+        if not ensure_save_dir(self, self.dual_a_saveDirEdit):
+            return
         config = self._build_mode_a_config()
         planned_path = os.path.join(
             config.save_dir, dual_a_csv_filename(config.sample_name, config.device_mode)
@@ -543,17 +545,24 @@ class DualChannelTab(QtWidgets.QWidget):
         total_points = len(config.build_voltage_list())
         self.dual_a_progressBar.setMaximum(max(total_points, 1))
         self.dual_a_progressBar.setValue(0)
+        reverse_from_index = config.forward_point_count() if config.hysteresis else None
         if config.use_luminance:
             setup_luminance_axis(self.dual_a_plotWidget)
-            self._plot_buffer_a = DualAxisPlotBuffer(self.dual_a_plotWidget)
+            self._plot_buffer_a = DualAxisPlotBuffer(
+                self.dual_a_plotWidget, reverse_from_index=reverse_from_index
+            )
         else:
-            self._plot_buffer_a = PlotBuffer(self.dual_a_plotWidget)
+            self._plot_buffer_a = PlotBuffer(
+                self.dual_a_plotWidget, reverse_from_index=reverse_from_index
+            )
         self.viewModel.start_mode_a(config)
 
     def _on_mode_a_stop_clicked(self) -> None:
         self.viewModel.stop_mode_a()
 
     def _on_mode_b_start_clicked(self) -> None:
+        if not ensure_save_dir(self, self.dual_b_saveDirEdit):
+            return
         chan_a = self._build_channel_config("chA")
         chan_b = self._build_channel_config("chB")
 
@@ -606,19 +615,30 @@ class DualChannelTab(QtWidgets.QWidget):
             led_channel == "B" and self.dual_chB_useBm9CheckBox.isChecked() and bm9_port
         )
 
+        reverse_from_index_a = chan_a.forward_point_count() if chan_a.hysteresis else None
+        reverse_from_index_b = chan_b.forward_point_count() if chan_b.hysteresis else None
+
         if chan_a.enabled and uses_luminance_a:
             setup_luminance_axis(self.dual_chA_plotWidget)
-            self._plot_buffer_b_cha = DualAxisPlotBuffer(self.dual_chA_plotWidget)
+            self._plot_buffer_b_cha = DualAxisPlotBuffer(
+                self.dual_chA_plotWidget, reverse_from_index=reverse_from_index_a
+            )
         elif chan_a.enabled:
-            self._plot_buffer_b_cha = PlotBuffer(self.dual_chA_plotWidget)
+            self._plot_buffer_b_cha = PlotBuffer(
+                self.dual_chA_plotWidget, reverse_from_index=reverse_from_index_a
+            )
         else:
             self._plot_buffer_b_cha = None
 
         if chan_b.enabled and uses_luminance_b:
             setup_luminance_axis(self.dual_chB_plotWidget)
-            self._plot_buffer_b_chb = DualAxisPlotBuffer(self.dual_chB_plotWidget)
+            self._plot_buffer_b_chb = DualAxisPlotBuffer(
+                self.dual_chB_plotWidget, reverse_from_index=reverse_from_index_b
+            )
         elif chan_b.enabled:
-            self._plot_buffer_b_chb = PlotBuffer(self.dual_chB_plotWidget)
+            self._plot_buffer_b_chb = PlotBuffer(
+                self.dual_chB_plotWidget, reverse_from_index=reverse_from_index_b
+            )
         else:
             self._plot_buffer_b_chb = None
 

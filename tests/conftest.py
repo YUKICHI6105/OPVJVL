@@ -28,7 +28,7 @@ def isolate_settings_file(tmp_path_factory):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def setup_qt_environment():
+def setup_qt_environment(tmp_path_factory):
     """Qtテスト環境の初期化。"""
     # QMessageBoxがテスト実行中にポップアップしてイベントループをブロックするのを防ぐ
     from qtcompat import QtWidgets
@@ -36,6 +36,15 @@ def setup_qt_environment():
     QtWidgets.QMessageBox.critical = lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Ok
     QtWidgets.QMessageBox.information = lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Ok
     QtWidgets.QMessageBox.question = lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Yes
+
+    # 保存先が空欄のまま開始ボタンをクリックするテスト(F5ショートカット・排他ロック等)で、
+    # ensure_save_dir(review.md項目3)が本物のディレクトリ選択ダイアログを開いて
+    # イベントループをブロックしないよう、一時ディレクトリを返すスタブに差し替える。
+    # (個別テストがmonkeypatchで上書きした場合はそちらが優先される)
+    _default_save_dir = str(tmp_path_factory.mktemp("default_save_dir"))
+    QtWidgets.QFileDialog.getExistingDirectory = (
+        lambda *args, **kwargs: _default_save_dir
+    )
 
     # pyqtgraphがオフスクリーン環境で描画してクラッシュするのを防ぐため、PlotBufferをモック化する
     from viewmodels import base_viewmodel

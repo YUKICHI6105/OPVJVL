@@ -1,10 +1,10 @@
-"""上書き確認ダイアログ(views/save_confirm.py)の単体テスト。"""
+"""上書き確認・保存先確認ダイアログ(views/save_confirm.py)の単体テスト。"""
 from __future__ import annotations
 
 import os
 
 from qtcompat import QtWidgets, enum_value
-from views.save_confirm import confirm_overwrite
+from views.save_confirm import confirm_overwrite, ensure_save_dir
 
 
 def test_no_existing_paths_skips_dialog(tmp_path, monkeypatch):
@@ -68,3 +68,56 @@ def test_mixed_existing_and_missing_paths(tmp_path, monkeypatch):
     assert confirm_overwrite(None, [str(existing), missing]) is True
     assert os.path.basename(str(existing)) in captured["message"]
     assert os.path.basename(missing) not in captured["message"]
+
+
+# ----------------------------------------------------------------------
+# review.md項目3: ensure_save_dir
+# ----------------------------------------------------------------------
+def test_ensure_save_dir_returns_true_when_already_filled(qtbot):
+    """入力済みならダイアログを出さず即Trueを返す。"""
+    edit = QtWidgets.QLineEdit("C:/existing_dir")
+    qtbot.addWidget(edit)
+    assert ensure_save_dir(None, edit) is True
+    assert edit.text() == "C:/existing_dir"
+
+
+def test_ensure_save_dir_empty_and_selected(tmp_path, qtbot, monkeypatch):
+    """空欄でディレクトリを選択した場合、setTextしてTrueを返す。"""
+    edit = QtWidgets.QLineEdit("")
+    qtbot.addWidget(edit)
+    selected_dir = str(tmp_path)
+
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog, "getExistingDirectory", lambda *a, **kw: selected_dir
+    )
+
+    assert ensure_save_dir(None, edit) is True
+    assert edit.text() == selected_dir
+
+
+def test_ensure_save_dir_empty_and_cancelled(qtbot, monkeypatch):
+    """空欄でキャンセルした場合、情報ダイアログを出しFalseを返す。"""
+    edit = QtWidgets.QLineEdit("")
+    qtbot.addWidget(edit)
+
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getExistingDirectory", lambda *a, **kw: "")
+
+    info_calls = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox, "information", lambda *a, **kw: info_calls.append(a)
+    )
+
+    assert ensure_save_dir(None, edit) is False
+    assert edit.text() == ""
+    assert len(info_calls) == 1
+
+
+def test_ensure_save_dir_whitespace_only_treated_as_empty(qtbot, monkeypatch):
+    """空白のみのテキストは空欄扱いとしてダイアログを開く。"""
+    edit = QtWidgets.QLineEdit("   ")
+    qtbot.addWidget(edit)
+
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getExistingDirectory", lambda *a, **kw: "")
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *a, **kw: None)
+
+    assert ensure_save_dir(None, edit) is False

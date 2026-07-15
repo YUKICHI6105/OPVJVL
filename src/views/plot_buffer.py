@@ -22,6 +22,9 @@ from views import theme
 _DEFAULT_LINE_COLOR = "#1f77b4"
 _LUMINANCE_LINE_COLOR = "#d62728"
 
+# review.md項目2: ヒステリシス測定(往復掃引)の復路を往路と別色で描画するための色。
+_REVERSE_LINE_COLOR = "#ff7f0e"
+
 # review.md指摘#3: アプリ全体はダークテーマQSSだが、グラフ(pyqtgraph)は
 # 白背景・黒前景(軸/目盛/ラベル)に固定する。pyqtgraphの背景・前景色は
 # PlotWidget生成より前に設定する必要があるため、全タブ(opv_tab/jvl_tab/
@@ -157,23 +160,54 @@ class PlotBuffer:
 
     review.md指摘#6: ``curve_name`` を指定した場合のみ凡例へ登録する
     (JVLタブのみ使用。他タブは名前なし=凡例なしで従来通り)。
+
+    review.md項目2: ``reverse_from_index`` を指定すると、``add_point`` で
+    受け取った通算点数(0始まり)がこの値以上になった点から、既定色(往路)とは
+    別カーブ(復路、``_REVERSE_LINE_COLOR``)へ切り替える。凡例ラベルは
+    ``curve_name`` 指定時は「{curve_name} (Forward)」/「{curve_name} (Reverse)」、
+    未指定でも「Forward」/「Reverse」として凡例へ登録する。未指定
+    (``None``、既定)の場合は完全に従来通り1カーブのみ。
     """
 
-    def __init__(self, plot_widget: pg.PlotWidget, pen=None, curve_name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        plot_widget: pg.PlotWidget,
+        pen=None,
+        curve_name: Optional[str] = None,
+        reverse_from_index: Optional[int] = None,
+    ) -> None:
         plot_widget.clear()
         _clear_luminance_curves(plot_widget)
         self.plot_widget = plot_widget
         self.x: List[float] = []
         self.y: List[float] = []
+        self.reverse_x: List[float] = []
+        self.reverse_y: List[float] = []
+        self._reverse_from_index = reverse_from_index
         if pen is None:
             pen = pg.mkPen(_DEFAULT_LINE_COLOR, width=float(_GRAPH_STYLE["graph_line_width"]))
-        plot_kwargs = {}
-        if curve_name is not None:
+        symbol_size = int(_GRAPH_STYLE["graph_symbol_size"])
+
+        forward_kwargs = {}
+        reverse_kwargs = {}
+        if reverse_from_index is not None:
+            forward_kwargs["name"] = f"{curve_name} (Forward)" if curve_name else "Forward"
+            reverse_kwargs["name"] = f"{curve_name} (Reverse)" if curve_name else "Reverse"
+        elif curve_name is not None:
+            forward_kwargs["name"] = curve_name
+
+        if forward_kwargs or reverse_kwargs:
             _reset_legend(plot_widget)
-            plot_kwargs["name"] = curve_name
+
         self.curve = plot_widget.plot(
-            [], [], pen=pen, symbol="o", symbolSize=int(_GRAPH_STYLE["graph_symbol_size"]), **plot_kwargs
+            [], [], pen=pen, symbol="o", symbolSize=symbol_size, **forward_kwargs
         )
+        self.reverse_curve = None
+        if reverse_from_index is not None:
+            reverse_pen = pg.mkPen(_REVERSE_LINE_COLOR, width=float(_GRAPH_STYLE["graph_line_width"]))
+            self.reverse_curve = plot_widget.plot(
+                [], [], pen=reverse_pen, symbol="o", symbolSize=symbol_size, **reverse_kwargs
+            )
         # review.md指摘#2: 新規測定開始時は、前回のズーム状態に関わらず
         # xy両軸ともauto rangeへ戻す(輝度用ViewBoxがあれば同様)。
         plot_widget.getPlotItem().enableAutoRange()
@@ -182,9 +216,15 @@ class PlotBuffer:
             luminance_viewbox.enableAutoRange(x=True, y=True)
 
     def add_point(self, x: float, y: float) -> None:
-        self.x.append(x)
-        self.y.append(y)
-        self.curve.setData(self.x, self.y)
+        total_so_far = len(self.x) + len(self.reverse_x)
+        if self._reverse_from_index is not None and total_so_far >= self._reverse_from_index:
+            self.reverse_x.append(x)
+            self.reverse_y.append(y)
+            self.reverse_curve.setData(self.reverse_x, self.reverse_y)
+        else:
+            self.x.append(x)
+            self.y.append(y)
+            self.curve.setData(self.x, self.y)
 
 
 class DualAxisPlotBuffer:
@@ -194,6 +234,11 @@ class DualAxisPlotBuffer:
     凡例へ登録する。輝度カーブは別ViewBox(``luminance_viewbox``)に直接
     addItemしており ``plot_widget.plot(name=...)`` を通らないため、
     LegendItemへは手動で ``addItem()`` する。
+
+    review.md項目2: ``reverse_from_index`` を指定すると、電流カーブのみ
+    ``PlotBuffer`` と同様に往路/復路で分割する。輝度カーブは分割せず、
+    常に単一の``_LUMINANCE_LINE_COLOR``カーブ(凡例は「Luminance」1つ)のまま
+    往路・復路を通して描画する。
     """
 
     def __init__(
@@ -201,31 +246,52 @@ class DualAxisPlotBuffer:
         plot_widget: pg.PlotWidget,
         current_name: Optional[str] = None,
         luminance_name: Optional[str] = None,
+        reverse_from_index: Optional[int] = None,
     ) -> None:
         plot_widget.clear()
         _clear_luminance_curves(plot_widget)
         self.plot_widget = plot_widget
         self.x: List[float] = []
         self.y_current: List[float] = []
+        self.reverse_x: List[float] = []
+        self.reverse_y_current: List[float] = []
         self.x_luminance: List[float] = []
         self.y_luminance: List[float] = []
+        self._reverse_from_index = reverse_from_index
         line_width = float(_GRAPH_STYLE["graph_line_width"])
+        symbol_size = int(_GRAPH_STYLE["graph_symbol_size"])
 
         legend = None
-        if current_name is not None or luminance_name is not None:
+        need_legend = current_name is not None or luminance_name is not None or reverse_from_index is not None
+        if need_legend:
             legend = _reset_legend(plot_widget)
 
-        plot_kwargs = {}
-        if current_name is not None:
-            plot_kwargs["name"] = current_name
+        current_kwargs = {}
+        reverse_kwargs = {}
+        if reverse_from_index is not None:
+            current_kwargs["name"] = f"{current_name} (Forward)" if current_name else "Forward"
+            reverse_kwargs["name"] = f"{current_name} (Reverse)" if current_name else "Reverse"
+        elif current_name is not None:
+            current_kwargs["name"] = current_name
+
         self.current_curve = plot_widget.plot(
             [],
             [],
             pen=pg.mkPen(_DEFAULT_LINE_COLOR, width=line_width),
             symbol="o",
-            symbolSize=int(_GRAPH_STYLE["graph_symbol_size"]),
-            **plot_kwargs,
+            symbolSize=symbol_size,
+            **current_kwargs,
         )
+        self.reverse_current_curve = None
+        if reverse_from_index is not None:
+            self.reverse_current_curve = plot_widget.plot(
+                [],
+                [],
+                pen=pg.mkPen(_REVERSE_LINE_COLOR, width=line_width),
+                symbol="o",
+                symbolSize=symbol_size,
+                **reverse_kwargs,
+            )
         self.luminance_curve = pg.PlotDataItem(
             [], [], pen=pg.mkPen(_LUMINANCE_LINE_COLOR, width=line_width)
         )
@@ -240,9 +306,15 @@ class DualAxisPlotBuffer:
             luminance_viewbox.enableAutoRange(x=True, y=True)
 
     def add_point(self, x: float, current: float, luminance: Optional[float] = None) -> None:
-        self.x.append(x)
-        self.y_current.append(current)
-        self.current_curve.setData(self.x, self.y_current)
+        total_so_far = len(self.x) + len(self.reverse_x)
+        if self._reverse_from_index is not None and total_so_far >= self._reverse_from_index:
+            self.reverse_x.append(x)
+            self.reverse_y_current.append(current)
+            self.reverse_current_curve.setData(self.reverse_x, self.reverse_y_current)
+        else:
+            self.x.append(x)
+            self.y_current.append(current)
+            self.current_curve.setData(self.x, self.y_current)
         if luminance is not None:
             self.x_luminance.append(x)
             self.y_luminance.append(luminance)
@@ -322,23 +394,42 @@ def setup_luminance_axis(plot_widget: pg.PlotWidget) -> None:
     _sync_luminance_viewbox()
     main_viewbox.sigResized.connect(_sync_luminance_viewbox)
 
-    def _cleanup_luminance_viewbox() -> None:
-        """PlotWidget破棄時にViewBoxを右軸・シーン・シグナルから切り離す。
+    cleanup_state = {"done": False}
 
+    def _cleanup_luminance_viewbox() -> None:
+        """ViewBoxを右軸・シーン・シグナルから切り離す(冪等)。
+
+        PlotWidget破棄時(``destroyed``)に自動で呼ばれるほか、テスト等が
+        ``cleanup_luminance_axis()``経由で破棄前に明示的に呼ぶこともできる。
         QObjectの ``destroyed`` はデストラクタで子オブジェクト削除より前に
         emitされるため、この時点ではシーン・AxisItem・ViewBoxのC++オブジェクトは
         まだ生きており、安全に切り離せる。各ステップは破棄順序の揺らぎに備えて
         個別にRuntimeError(破棄済みラッパー参照)を握りつぶす。
+
+        XLink切断(``setXLink(None)``)を最優先で行う。輝度ViewBoxは
+        ``setXLink(plot_widget)``によりメインViewBoxのX範囲変更シグナルを
+        購読しており、切断せずにPlotWidgetが破棄されると、後続のイベント処理で
+        ``linkedXChanged`` → ``screenGeometry()`` が破棄済みPlotWidgetを参照して
+        「wrapped C/C++ object of type PlotWidget has been deleted」→
+        アクセス違反クラッシュに至るため。
         """
-        # 1) メインViewBoxからの位置同期シグナルを切断する
+        if cleanup_state["done"]:
+            return
+        cleanup_state["done"] = True
+        # 0) 輝度ViewBox発のシグナルを遮断する(切断処理中の再入・連鎖通知防止)
         try:
-            main_viewbox.sigResized.disconnect(_sync_luminance_viewbox)
-        except (RuntimeError, TypeError):
+            luminance_viewbox.blockSignals(True)
+        except RuntimeError:
             pass
-        # 2) X軸リンク(setXLink)を解除する
+        # 1) X軸リンク(setXLink)を最優先で解除する(クラッシュ経路の本丸)
         try:
             luminance_viewbox.setXLink(None)
         except RuntimeError:
+            pass
+        # 2) メインViewBoxからの位置同期シグナルを切断する
+        try:
+            main_viewbox.sigResized.disconnect(_sync_luminance_viewbox)
+        except (RuntimeError, TypeError):
             pass
         # 3) 右軸(AxisItem)のweakref参照を解除する(本質的な対処。
         #    ViewBoxが先に破棄されてもAxisItemが参照しなくなる)。
@@ -358,5 +449,25 @@ def setup_luminance_axis(plot_widget: pg.PlotWidget) -> None:
                 viewbox_scene.removeItem(luminance_viewbox)
         except RuntimeError:
             pass
+        # 5) PlotWidget側の参照をクリアする(冪等な再セットアップを可能にする)
+        try:
+            plot_widget.luminance_viewbox = None
+        except RuntimeError:
+            pass
 
     plot_widget.destroyed.connect(_cleanup_luminance_viewbox)
+    # 破棄前の明示的クリーンアップ(cleanup_luminance_axis)用の参照。
+    plot_widget._luminance_axis_cleanup = _cleanup_luminance_viewbox
+
+
+def cleanup_luminance_axis(plot_widget: pg.PlotWidget) -> None:
+    """輝度用ViewBoxを明示的に切り離す公開ヘルパー(冪等)。
+
+    ``setup_luminance_axis()``がPlotWidgetの``destroyed``シグナルへ接続する
+    クリーンアップと同一の処理を、破棄前(テストのteardown等)に安全に
+    実行できるようにする。``setup_luminance_axis()``を通っていない
+    PlotWidgetに対しては何もしない。複数回呼んでも安全。
+    """
+    cleanup = getattr(plot_widget, "_luminance_axis_cleanup", None)
+    if cleanup is not None:
+        cleanup()

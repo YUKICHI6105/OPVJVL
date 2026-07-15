@@ -15,7 +15,7 @@ from models.measurement.csv_writer import opv_csv_filename, save_points_csv
 from viewmodels.opv_viewmodel import OPVViewModel
 from views import tab_layout
 from views.plot_buffer import PlotBuffer, install_auto_range_menu, set_iv_axis_labels
-from views.save_confirm import confirm_overwrite
+from views.save_confirm import confirm_overwrite, ensure_save_dir
 
 
 class OPVTab(QtWidgets.QWidget):
@@ -163,6 +163,8 @@ class OPVTab(QtWidgets.QWidget):
     # イベントハンドラ
     # ------------------------------------------------------------------
     def _on_start_clicked(self) -> None:
+        if not ensure_save_dir(self, self.opv_saveDirEdit):
+            return
         config = self._build_config()
         planned_path = os.path.join(config.save_dir, opv_csv_filename(config.sample_name))
         if not confirm_overwrite(self, [planned_path]):
@@ -170,7 +172,8 @@ class OPVTab(QtWidgets.QWidget):
         total_points = len(config.build_voltage_list())
         self.opv_progressBar.setMaximum(max(total_points, 1))
         self.opv_progressBar.setValue(0)
-        self._plot_buffer = PlotBuffer(self.opv_plotWidget)
+        reverse_from_index = config.forward_point_count() if config.hysteresis else None
+        self._plot_buffer = PlotBuffer(self.opv_plotWidget, reverse_from_index=reverse_from_index)
         self.viewModel.start_measurement(config)
 
     def _on_stop_clicked(self) -> None:

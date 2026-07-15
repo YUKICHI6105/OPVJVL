@@ -52,6 +52,19 @@ class OPVConfig:
             base = np.concatenate([base, base[::-1][1:]])
         return np.repeat(base, self.iteration)
 
+    def forward_point_count(self) -> int:
+        """``build_voltage_list()``のうち往路(復路開始前)に属する点数を返す。
+
+        review.md項目2: ヒステリシス測定時に復路を別色・別凡例で描画するため、
+        通算点数がこの値に達した時点からView側が「復路」への切り替えを判定できる
+        ようにする。``hysteresis=False``の場合は全体が往路なので全点数を返す。
+
+        Returns:
+            往路の点数(= 往路arangeの点数 × ``iteration``)。
+        """
+        base = np.arange(self.v_min, self.v_max + self.v_step * 0.5, self.v_step)
+        return len(base) * self.iteration
+
 
 @dataclass
 class JVLConfig(OPVConfig):
@@ -114,6 +127,15 @@ class ChannelConfig:
         if self.hysteresis:
             base = np.concatenate([base, base[::-1][1:]])
         return np.repeat(base, self.iteration)
+
+    def forward_point_count(self) -> int:
+        """``build_voltage_list()``のうち往路(復路開始前)に属する点数を返す。
+
+        ``OPVConfig.forward_point_count``と同様(review.md項目2)。
+        ``hysteresis=False``の場合は全体が往路なので全点数を返す。
+        """
+        base = np.arange(self.v_min, self.v_max + self.v_step * 0.5, self.v_step)
+        return len(base) * self.iteration
 
 
 @dataclass

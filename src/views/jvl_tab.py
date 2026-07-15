@@ -22,7 +22,7 @@ from views.plot_buffer import (
     set_iv_axis_labels,
     setup_luminance_axis,
 )
-from views.save_confirm import confirm_overwrite
+from views.save_confirm import confirm_overwrite, ensure_save_dir
 
 
 class JVLTab(QtWidgets.QWidget):
@@ -208,6 +208,8 @@ class JVLTab(QtWidgets.QWidget):
     # イベントハンドラ
     # ------------------------------------------------------------------
     def _on_start_clicked(self) -> None:
+        if not ensure_save_dir(self, self.jvl_saveDirEdit):
+            return
         config = self._build_config()
         planned_path = os.path.join(config.save_dir, jvl_csv_filename(config.sample_name))
         if not confirm_overwrite(self, [planned_path]):
@@ -215,10 +217,16 @@ class JVLTab(QtWidgets.QWidget):
         total_points = len(config.build_voltage_list())
         self.jvl_progressBar.setMaximum(max(total_points, 1))
         self.jvl_progressBar.setValue(0)
+        reverse_from_index = config.forward_point_count() if config.hysteresis else None
         # review.md指摘#6: JVLタブのみ凡例名を指定して凡例を表示する
-        self._iv_plot_buffer = PlotBuffer(self.jvl_ivPlotWidget, curve_name="Current")
+        self._iv_plot_buffer = PlotBuffer(
+            self.jvl_ivPlotWidget, curve_name="Current", reverse_from_index=reverse_from_index
+        )
         self._ivl_plot_buffer = DualAxisPlotBuffer(
-            self.jvl_ivlPlotWidget, current_name="Current", luminance_name="Luminance"
+            self.jvl_ivlPlotWidget,
+            current_name="Current",
+            luminance_name="Luminance",
+            reverse_from_index=reverse_from_index,
         )
         self.viewModel.start_measurement(config)
 
