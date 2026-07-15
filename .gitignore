@@ -12,3 +12,6 @@ settings.json
 /*_dualB_meta.json
 /scratchpad*.log
 log/
+
+# Sphinxドキュメントのビルド成果物
+docs/build/

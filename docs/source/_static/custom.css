@@ -1,0 +1,100 @@
+/*
+   Read the Docs theme を日本語の実験手順書として読みやすく調整します。
+   見出しのサイズ順を固定し、本文・表・注記の余白を少し広げています。
+*/
+.wy-nav-content {
+    max-width: 1000px !important;
+}
+
+.rst-content {
+    font-size: 16px;
+    line-height: 1.8;
+}
+
+.rst-content h1,
+.rst-content h2,
+.rst-content h3,
+.rst-content h4 {
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1.35;
+}
+
+.rst-content h1 {
+    font-size: 2rem;
+    margin: 0 0 1.2rem;
+}
+
+.rst-content h2 {
+    font-size: 1.55rem;
+    margin: 2.4rem 0 1rem;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid #d9e2ec;
+}
+
+.rst-content h3 {
+    font-size: 1.25rem;
+    margin: 2rem 0 0.8rem;
+}
+
+.rst-content h4 {
+    font-size: 1.05rem;
+    margin: 1.5rem 0 0.6rem;
+}
+
+.rst-content p,
+.rst-content ul,
+.rst-content ol,
+.rst-content table.docutils,
+.rst-content .admonition,
+.rst-content div[class^="highlight"] {
+    margin-bottom: 1rem;
+}
+
+.rst-content .section {
+    margin-bottom: 2.2rem;
+}
+
+.rst-content table.docutils {
+    font-size: 0.95rem;
+    line-height: 1.65;
+}
+
+.rst-content table.docutils th {
+    font-weight: 700;
+}
+
+.rst-content .admonition {
+    line-height: 1.7;
+}
+
+.rst-content code.literal {
+    font-size: 0.92em;
+}
+
+.rst-content dl.procedure {
+    margin: 0.8rem 0 1.6rem;
+}
+
+.rst-content dl.procedure dt {
+    color: #243b53;
+    font-weight: 700;
+    margin: 1.1rem 0 0.35rem;
+}
+
+.rst-content dl.procedure dd {
+    border-left: 3px solid #d9e8f5;
+    margin: 0 0 1rem 1.1rem;
+    padding: 0.15rem 0 0.1rem 0.9rem;
+}
+
+.rst-content dl.procedure dd > p:first-child {
+    margin-top: 0;
+}
+
+@media screen and (max-width: 768px) {
+    .rst-content dl.procedure dd {
+        margin-left: 0.45rem;
+        padding-left: 0.7rem;
+    }
+}
