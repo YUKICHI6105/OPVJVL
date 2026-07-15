@@ -72,7 +72,7 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
     "dual_a_v_max": 1.1,
     "dual_a_v_step": 0.02,
     "dual_a_iteration": 3,
-    "dual_a_nplc": 1.0,
+    "dual_a_nplc": 25.0,
     "dual_a_delay": 1.0,
     "dual_a_compliance": 0.02,
     "dual_a_hysteresis": False,

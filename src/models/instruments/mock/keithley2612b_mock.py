@@ -57,7 +57,7 @@ class Keithley2612BMock(AbstractSourceMeter):
         self.close_calls = 0
         self.reset_calls = 0
         self.output_calls: list[tuple[str, bool]] = []
-        self.configure_calls: list[tuple[str, float, float, bool]] = []
+        self.configure_calls: list[tuple[str, float, float]] = []
 
     # -- プリセット ---------------------------------------------------
 
@@ -96,11 +96,10 @@ class Keithley2612BMock(AbstractSourceMeter):
         channel: str,
         compliance_current: float,
         nplc: float,
-        auto_range: bool = True,
     ) -> None:
         self._validate_channel(channel)
         self.compliance_current = compliance_current
-        self.configure_calls.append((channel, compliance_current, nplc, auto_range))
+        self.configure_calls.append((channel, compliance_current, nplc))
 
     def set_output(self, channel: str, on: bool) -> None:
         self._validate_channel(channel)

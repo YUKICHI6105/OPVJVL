@@ -131,9 +131,9 @@ class _EventRecordingMock(Keithley2612BMock):
         self.events.append(("reset",))
         super().reset()
 
-    def configure_source_voltage(self, channel, compliance_current, nplc, auto_range=True):
+    def configure_source_voltage(self, channel, compliance_current, nplc):
         self.events.append(("configure", channel, compliance_current, nplc))
-        super().configure_source_voltage(channel, compliance_current, nplc, auto_range)
+        super().configure_source_voltage(channel, compliance_current, nplc)
 
     def set_output(self, channel, on) -> None:
         self.events.append(("output", channel, on))

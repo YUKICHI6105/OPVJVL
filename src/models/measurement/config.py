@@ -70,11 +70,18 @@ class JVLConfig(OPVConfig):
 
 @dataclass
 class DualAConfig(OPVConfig):
-    """モードA(2ch低ノイズ計測)の設定。"""
+    """モードA(2ch低ノイズ計測)の設定。
+
+    ``nplc``はOPVConfigの既定(1.0)を上書きする。ベースコード
+    (``bases/keithley2600/OPV_measurement_ver2.py``)は積分時間0.5秒を
+    使用しており、これは50Hz電源下でNPLC 25相当(0.5s / (1/50Hz) = 25)に
+    あたる。Keithley2612B固定運用であるモードAの初期値はこれに合わせる。
+    """
 
     device_mode: Literal["太陽電池", "発光素子"] = "太陽電池"
     use_luminance: bool = False
     bm9_port: Optional[str] = None
+    nplc: float = 25.0
 
 
 @dataclass

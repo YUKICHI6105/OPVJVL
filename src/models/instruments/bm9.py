@@ -2,6 +2,11 @@
 
 RS-232シリアル(2400bps, ODD parity, 7bit, stop1)で通信する。コマンドは
 ``"DBR0ST"``のみ。移植元は``keithley2400/InstrumentsControl.py``の``BM9``。
+
+読み取りタイムアウトは5秒の有限値とする(移植元の``timeout=None``とは
+異なる意図的な変更)。BM9の通信不良が度々発生するため、応答が5秒間ない
+場合は``InstrumentError``を送出し、測定をハングさせない(通信不良の検知を
+優先する)。
 """
 from __future__ import annotations
 

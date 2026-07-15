@@ -87,7 +87,7 @@ jvl_luminanceGroupBox (QGroupBox "輝度計(BM9)")
 
 表示パネルは`QTabWidget jvl_plotTabWidget`を挟み、2ページ構成:
 - ページ0 "I-V": `jvl_ivPlotWidget` (promoted PlotWidget)
-- ページ1 "I-V-L": `jvl_ivlPlotWidget` (promoted PlotWidget、右軸に輝度を重ね描画。既存`OPVJVL2/main_gui.py`の`ViewBox`二重化パターンをコードで実装)
+- ページ1 "I-V-L": `jvl_ivlPlotWidget` (promoted PlotWidget、右軸に輝度を重ね描画。`ViewBox`二重化パターンをコードで実装)
 
 **2ch活用モードタブ（`dual_channel_tab.ui`）**:
 

@@ -127,9 +127,9 @@ def test_run_dual_a_sequence_resets_and_configures_before_output_on():
         events.append(("reset",))
         original_reset()
 
-    def configure(channel, compliance_current, nplc, auto_range=True):
+    def configure(channel, compliance_current, nplc):
         events.append(("configure", channel, compliance_current, nplc))
-        original_configure(channel, compliance_current, nplc, auto_range)
+        original_configure(channel, compliance_current, nplc)
 
     def set_output(channel, on):
         events.append(("output", channel, on))

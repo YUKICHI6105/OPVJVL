@@ -126,17 +126,15 @@ class Keithley2400(AbstractSourceMeter):
         channel: str,
         compliance_current: float,
         nplc: float,
-        auto_range: bool = True,
     ) -> None:
+        # ベースコード(keithley2400/InstrumentsControl.pyのconfigure_source_voltage)
+        # と同一のコマンド列。SOUR:VOLT:MODE FIXはベースに存在しないため送信しない。
+        # SENS:FUNCのみSCPI完全形'CURR:DC'を用いる(ベースの'CURR'は省略形で同義)。
         self._write("SOUR:FUNC VOLT")
-        self._write("SOUR:VOLT:MODE FIX")
         self._write("SENS:FUNC 'CURR:DC'")
         self._write(f"SENS:CURR:PROT {compliance_current}")
         self._write(f"SENS:CURR:NPLC {nplc}")
-        if auto_range:
-            self._write("SENS:CURR:RANG:AUTO ON")
-        else:
-            self._write("SENS:CURR:RANG:AUTO OFF")
+        self._write("SENS:CURR:RANG:AUTO ON")
         self.set_output(channel, False)
 
     def set_output(self, channel: str, on: bool) -> None:

@@ -44,9 +44,8 @@ class AbstractSourceMeter(ABC):
         channel: str,
         compliance_current: float,
         nplc: float,
-        auto_range: bool = True,
     ) -> None:
-        """電圧ソースモードを設定する。"""
+        """電圧ソースモードを設定する。電流レンジは常にオートレンジとする。"""
 
     @abstractmethod
     def set_output(self, channel: str, on: bool) -> None:

@@ -212,7 +212,10 @@ class DualChannelTab(QtWidgets.QWidget):
         dual_a_measurementFormLayout.addRow("電圧掃引(Vmin/Vmax/Vstep):", dual_a_sweepRow)
 
         self.dual_a_iterationSpin = tab_layout.make_iteration_spin("dual_a_iterationSpin")
-        self.dual_a_nplcSpin = _make_double_spin("dual_a_nplcSpin", 0.01, 10.0, 2, 0.1, 1.0)
+        # NPLC上限25.0はKeithley2612Bの仕様上限。初期値25.0はベースコード
+        # (bases/keithley2600/OPV_measurement_ver2.py)の積分時間0.5秒
+        # (50Hzで25NPLC相当)に合わせる。
+        self.dual_a_nplcSpin = _make_double_spin("dual_a_nplcSpin", 0.01, 25.0, 2, 0.1, 25.0)
         dual_a_iterationNplcRow = QtWidgets.QHBoxLayout()
         dual_a_iterationNplcRow.setObjectName("dual_a_iterationNplcRow")
         dual_a_iterationNplcRow.addWidget(self.dual_a_iterationSpin)
@@ -415,7 +418,8 @@ class DualChannelTab(QtWidgets.QWidget):
 
         iteration_spin = tab_layout.make_iteration_spin(f"dual_{ch_prefix}_iterationSpin")
 
-        nplc_spin = _make_double_spin(f"dual_{ch_prefix}_nplcSpin", 0.01, 10.0, 2, 0.1, 1.0)
+        # NPLC上限25.0はKeithley2612Bの仕様上限(初期値は1.0のまま)。
+        nplc_spin = _make_double_spin(f"dual_{ch_prefix}_nplcSpin", 0.01, 25.0, 2, 0.1, 1.0)
         delay_spin = _make_double_spin(f"dual_{ch_prefix}_delaySpin", 0.0, 60.0, 2, 0.1, 1.0, "")
         timing_row = QtWidgets.QHBoxLayout()
         timing_row.setObjectName(f"dual_{ch_prefix}_timingRow")

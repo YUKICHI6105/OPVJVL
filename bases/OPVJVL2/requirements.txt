@@ -1,7 +1,0 @@
-PyQt6
-pyqtgraph
-pyvisa
-pyvisa-py   # VISAバックエンド(NI-VISA等の代わりに使う場合。NI-VISA/Keysight VISAが入っていれば不要)
-pyserial
-numpy
-pandas

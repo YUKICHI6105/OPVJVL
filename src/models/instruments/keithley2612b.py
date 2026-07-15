@@ -2,8 +2,7 @@
 
 PyVISA + TSP(Lua)コマンドでKeithley 2612Bを制御する。サードパーティの
 ``keithley2600``パッケージには依存せず、TSPコマンドを直接送受信する自前
-実装とする(要件定義書 A-3節の合意事項)。移植元は
-``OPVJVL2/instruments.py``の``Keithley2612B``。
+実装とする(要件定義書 A-3節の合意事項)。
 """
 from __future__ import annotations
 
@@ -97,14 +96,12 @@ class Keithley2612B(AbstractSourceMeter):
         channel: str,
         compliance_current: float,
         nplc: float,
-        auto_range: bool = True,
     ) -> None:
         self._validate_channel(channel)
         self._write(f"{channel}.source.func = {channel}.OUTPUT_DCVOLTS")
         self._write(f"{channel}.source.limiti = {compliance_current}")
         self._write(f"{channel}.measure.nplc = {nplc}")
-        auto_state = "AUTORANGE_ON" if auto_range else "AUTORANGE_OFF"
-        self._write(f"{channel}.measure.autorangei = {channel}.{auto_state}")
+        self._write(f"{channel}.measure.autorangei = {channel}.AUTORANGE_ON")
         self.set_output(channel, False)
 
     def set_output(self, channel: str, on: bool) -> None:

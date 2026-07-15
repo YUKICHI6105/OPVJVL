@@ -103,7 +103,7 @@ docs/   … 要件定義書_基本設計書.md、引継ぎドキュメント.md 
 | 10 | **タスクバー/アプリID設定・起動時間計測** | `main.py:74-79`(SetCurrentProcessExplicitAppUserModelID)、起動時間ログ | 無し(優先度低) |
 | 11 | **配布ビルドパイプライン** | `build_pipeline/`(PyInstaller一式)+ビルドスキル | 無し。本番機(Python3.9)への配布手段が未整備 |
 | 12 | **I-V接触確認(コンタクトチェック)機能** | `IVCheckThread`(`threads/measurement.py:289-381`)+コンプライアンス超過時の自動停止シグナル | 無し(OPVJVL要件に含めるかは要判断。コンプライアンス到達の検知・通知も無い) |
-| 13 | **README / CODE_CONVENTIONS** | `README.md`、`CODE_CONVENTIONS.md`、`BUG_REVIEW_DECISIONS.md` | ルートREADMEが無い(旧`OPVJVL2/README.md`等は削除済み)。規約文書無し |
+| 13 | **README / CODE_CONVENTIONS** | `README.md`、`CODE_CONVENTIONS.md`、`BUG_REVIEW_DECISIONS.md` | ルートREADMEが無い。規約文書無し |
 
 ### 3-2. 構造がEQEと乖離している箇所とその影響
 
