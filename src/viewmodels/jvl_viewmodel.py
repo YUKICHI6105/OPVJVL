@@ -10,7 +10,7 @@ from typing import Optional
 from models.instruments import registry
 from models.measurement import csv_writer
 from models.measurement.config import JVLConfig
-from models.measurement.sequences import run_jvl_sequence
+from models.measurement.sequences import run_contact_check_ramp_sequence, run_jvl_sequence
 from qtcompat import QObject, pyqtSignal
 from viewmodels import base_viewmodel as bvm
 from viewmodels.device_discovery import list_serial_ports, list_visa_resources
@@ -28,11 +28,16 @@ class JVLViewModel(QObject):
     error = pyqtSignal(str)
     finished_ok = pyqtSignal(list, str, bool)  # points, csv_path, aborted
 
+    # 接触確認(JVL式: 0Vから昇圧し、電流閾値到達で自動停止するトグル動作)
+    contact_check_running_changed = pyqtSignal(bool)
+    contact_check_reading = pyqtSignal(float, float)  # voltage, current
+
     def __init__(self, parent=None) -> None:
         # MVVMの依存方向を守るため、ViewModelはViewを一切参照しない。
         # シグナルの結線はView側(JVLTab._bind_viewmodel)の責務とする。
         super().__init__(parent)
         self._worker: Optional[MeasurementWorker] = None
+        self._contact_worker: Optional[MeasurementWorker] = None
 
     # ------------------------------------------------------------------
     # 機器一覧の再検索
@@ -52,6 +57,8 @@ class JVLViewModel(QObject):
     def start_measurement(self, config: JVLConfig) -> None:
         if self._worker is not None and self._worker.isRunning():
             return  # 二重起動防止(B-7節)
+        if self._contact_worker is not None and self._contact_worker.isRunning():
+            return  # 接触確認中は本測定を開始できない(機器共有排他)
 
         if config.v_max <= config.v_min:
             self.error.emit(f"Vmax({config.v_max})はVmin({config.v_min})より大きい値にしてください。")
@@ -160,3 +167,64 @@ class JVLViewModel(QObject):
     def _reset_running_state(self) -> None:
         self.running_changed.emit(False)
         self._worker = None
+
+    # ------------------------------------------------------------------
+    # 接触確認(JVL式: 0Vから昇圧し、電流閾値到達で自動停止するトグル動作)
+    # ------------------------------------------------------------------
+    def start_contact_check(
+        self,
+        device_type: str,
+        connection: str,
+        channel: str,
+        use_mock: bool,
+        compliance_current: float,
+        nplc: float,
+        threshold_current: float,
+        v_max: float,
+    ) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return  # 本測定と排他(B-7節)
+        if self._contact_worker is not None and self._contact_worker.isRunning():
+            return  # 二重起動防止
+
+        smu = registry.create_source_meter(
+            device_type, connection, use_mock=use_mock, preset="jvl"
+        )
+        make_iterator = functools.partial(
+            run_contact_check_ramp_sequence,
+            smu,
+            channel,
+            compliance_current,
+            nplc,
+            threshold_current,
+            v_max=v_max,
+        )
+
+        worker = MeasurementWorker(make_iterator, smu, total_points=1)
+        worker.point_measured.connect(self._on_contact_check_point)
+        worker.finished_ok.connect(self._on_contact_check_finished)
+        worker.error.connect(self._on_contact_check_error)
+        self._contact_worker = worker
+
+        self.running_changed.emit(True)
+        self.contact_check_running_changed.emit(True)
+        worker.start()
+
+    def stop_contact_check(self) -> None:
+        if self._contact_worker is not None:
+            self._contact_worker.request_stop()
+
+    def _on_contact_check_point(self, point) -> None:
+        self.contact_check_reading.emit(point.voltage, point.current)
+
+    def _on_contact_check_finished(self, points: list, csv_path: str, aborted: bool) -> None:
+        self.running_changed.emit(False)
+        self.contact_check_running_changed.emit(False)
+        self._contact_worker = None
+
+    def _on_contact_check_error(self, message: str) -> None:
+        self.error_appended.emit(message)
+        self.error.emit(message)
+        self.running_changed.emit(False)
+        self.contact_check_running_changed.emit(False)
+        self._contact_worker = None

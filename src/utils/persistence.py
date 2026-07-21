@@ -66,6 +66,8 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
     "jvl_compliance": 0.02,
     "jvl_use_luminance": True,
     "jvl_hysteresis": False,
+    "jvl_contact_check_threshold": 0.001,
+    "jvl_contact_check_v_max": 5.0,
     # --- 2ch活用モードA ---
     "dual_a_device_mode": "太陽電池",
     "dual_a_v_min": -0.1,
@@ -76,6 +78,8 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
     "dual_a_delay": 1.0,
     "dual_a_compliance": 0.02,
     "dual_a_hysteresis": False,
+    "dual_a_contact_check_threshold": 0.001,
+    "dual_a_contact_check_v_max": 5.0,
     # --- 2ch活用モードB(共通) ---
     "dual_b_save_dir": "",
     # --- 2ch活用モードB チャンネルA ---
@@ -90,6 +94,8 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
     "dual_chA_use_bm9": False,
     "dual_chA_sample_name": "",
     "dual_chA_hysteresis": False,
+    "dual_chA_contact_check_threshold": 0.001,
+    "dual_chA_contact_check_v_max": 5.0,
     # --- 2ch活用モードB チャンネルB ---
     "dual_chB_enabled": False,
     "dual_chB_device_mode": "太陽電池",
@@ -102,6 +108,8 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
     "dual_chB_use_bm9": False,
     "dual_chB_sample_name": "",
     "dual_chB_hysteresis": False,
+    "dual_chB_contact_check_threshold": 0.001,
+    "dual_chB_contact_check_v_max": 5.0,
 }
 
 #: settings.json 全体のデフォルト

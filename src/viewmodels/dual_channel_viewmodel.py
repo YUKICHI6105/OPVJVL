@@ -11,7 +11,12 @@ from typing import Optional
 from models.instruments import registry
 from models.measurement import csv_writer
 from models.measurement.config import ChannelConfig, DualAConfig, DualBConfig
-from models.measurement.sequences import run_dual_a_sequence, run_dual_b_sequence
+from models.measurement.sequences import (
+    run_contact_check_hold_sequence,
+    run_contact_check_ramp_sequence,
+    run_dual_a_sequence,
+    run_dual_b_sequence,
+)
 from qtcompat import QObject, pyqtSignal
 from viewmodels import base_viewmodel as bvm
 from workers.dual_channel_worker import DualChannelWorker
@@ -42,12 +47,25 @@ class DualChannelViewModel(QObject):
     error_b = pyqtSignal(str)
     finished_ok_b = pyqtSignal(list, str, str, bool)  # points, csv_path_a, csv_path_b, aborted
 
+    # 接触確認 モードA用(smua固定。device_modeでhold/ramp自動切替)
+    contact_check_running_changed_a = pyqtSignal(bool)
+    contact_check_reading_a = pyqtSignal(float, float)  # voltage, current
+
+    # 接触確認 モードB用(smua/smubのどちらか。物理SMUは1台共有のため単一スロット)
+    contact_check_running_changed_b = pyqtSignal(bool)
+    contact_check_reading_b = pyqtSignal(str, float, float)  # channel("A"/"B"), voltage, current
+
     def __init__(self, parent=None) -> None:
         # MVVMの依存方向を守るため、ViewModelはViewを一切参照しない。
         # シグナルの結線はView側(DualChannelTab._bind_viewmodel)の責務とする。
         super().__init__(parent)
         self._worker_a: Optional[MeasurementWorker] = None
         self._worker_b: Optional[DualChannelWorker] = None
+        self._contact_worker_a: Optional[MeasurementWorker] = None
+        # モードBの物理SMUは1台共有のため、チャンネルA/Bどちらの接触確認でも
+        # 同一のスロットを使う(同時に2つ動かせないようにするため)。
+        self._contact_worker_b: Optional[MeasurementWorker] = None
+        self._contact_check_channel_b: Optional[str] = None
 
     # ==================================================================
     # モードA(2ch低ノイズ計測)
@@ -55,6 +73,8 @@ class DualChannelViewModel(QObject):
     def start_mode_a(self, config: DualAConfig) -> None:
         if self._worker_a is not None and self._worker_a.isRunning():
             return  # 二重起動防止(B-7節)
+        if self._contact_worker_a is not None and self._contact_worker_a.isRunning():
+            return  # 接触確認中は本測定を開始できない(機器共有排他)
 
         if config.v_max <= config.v_min:
             self.error_a.emit(f"Vmax({config.v_max})はVmin({config.v_min})より大きい値にしてください。")
@@ -166,6 +186,8 @@ class DualChannelViewModel(QObject):
     def start_mode_b(self, config: DualBConfig) -> None:
         if self._worker_b is not None and self._worker_b.isRunning():
             return  # 二重起動防止(B-7節)
+        if self._contact_worker_b is not None and self._contact_worker_b.isRunning():
+            return  # 接触確認中は本測定を開始できない(機器共有排他)
 
         chan_a = config.channel_a
         chan_b = config.channel_b
@@ -392,3 +414,141 @@ class DualChannelViewModel(QObject):
     def _reset_mode_b_running_state(self) -> None:
         self.running_changed_b.emit(False)
         self._worker_b = None
+
+    # ==================================================================
+    # 接触確認 モードA(smua固定。device_modeに応じてhold/ramp自動切替)
+    # ==================================================================
+    def start_contact_check_a(
+        self,
+        device_mode: str,
+        connection: str,
+        use_mock: bool,
+        compliance_current: float,
+        nplc: float,
+        threshold_current: float,
+        v_max: float,
+    ) -> None:
+        if self._worker_a is not None and self._worker_a.isRunning():
+            return  # 本測定と排他(B-7節)
+        if self._contact_worker_a is not None and self._contact_worker_a.isRunning():
+            return  # 二重起動防止
+
+        preset = "jvl" if device_mode == "発光素子" else "opv"
+        smu = registry.create_source_meter(
+            _DEVICE_TYPE_2612B, connection, use_mock=use_mock, preset=preset
+        )
+        if device_mode == "発光素子":
+            make_iterator = functools.partial(
+                run_contact_check_ramp_sequence,
+                smu,
+                "smua",
+                compliance_current,
+                nplc,
+                threshold_current,
+                v_max=v_max,
+            )
+        else:
+            make_iterator = functools.partial(
+                run_contact_check_hold_sequence, smu, "smua", compliance_current, nplc
+            )
+
+        worker = MeasurementWorker(make_iterator, smu, total_points=1)
+        worker.point_measured.connect(self._on_contact_check_a_point)
+        worker.finished_ok.connect(self._on_contact_check_a_finished)
+        worker.error.connect(self._on_contact_check_a_error)
+        self._contact_worker_a = worker
+
+        self.running_changed_a.emit(True)
+        self.contact_check_running_changed_a.emit(True)
+        worker.start()
+
+    def stop_contact_check_a(self) -> None:
+        if self._contact_worker_a is not None:
+            self._contact_worker_a.request_stop()
+
+    def _on_contact_check_a_point(self, point) -> None:
+        self.contact_check_reading_a.emit(point.voltage, point.current)
+
+    def _on_contact_check_a_finished(self, points: list, csv_path: str, aborted: bool) -> None:
+        self.running_changed_a.emit(False)
+        self.contact_check_running_changed_a.emit(False)
+        self._contact_worker_a = None
+
+    def _on_contact_check_a_error(self, message: str) -> None:
+        self.error_appended_a.emit(message)
+        self.error_a.emit(message)
+        self.running_changed_a.emit(False)
+        self.contact_check_running_changed_a.emit(False)
+        self._contact_worker_a = None
+
+    # ==================================================================
+    # 接触確認 モードB(smua/smubいずれか。物理SMUは1台共有のため単一スロット)
+    # ==================================================================
+    def start_contact_check_b(
+        self,
+        target_channel: str,
+        device_mode: str,
+        connection: str,
+        use_mock: bool,
+        compliance_current: float,
+        nplc: float,
+        threshold_current: float,
+        v_max: float,
+    ) -> None:
+        if self._worker_b is not None and self._worker_b.isRunning():
+            return  # 本測定と排他(B-7節)
+        if self._contact_worker_b is not None and self._contact_worker_b.isRunning():
+            return  # 二重起動防止(chA/chBどちらの接触確認も同一スロット)
+
+        preset = "jvl" if device_mode == "発光素子" else "opv"
+        smu = registry.create_source_meter(
+            _DEVICE_TYPE_2612B, connection, use_mock=use_mock, preset=preset
+        )
+        if device_mode == "発光素子":
+            make_iterator = functools.partial(
+                run_contact_check_ramp_sequence,
+                smu,
+                target_channel,
+                compliance_current,
+                nplc,
+                threshold_current,
+                v_max=v_max,
+            )
+        else:
+            make_iterator = functools.partial(
+                run_contact_check_hold_sequence, smu, target_channel, compliance_current, nplc
+            )
+
+        self._contact_check_channel_b = "A" if target_channel == "smua" else "B"
+
+        worker = MeasurementWorker(make_iterator, smu, total_points=1)
+        worker.point_measured.connect(self._on_contact_check_b_point)
+        worker.finished_ok.connect(self._on_contact_check_b_finished)
+        worker.error.connect(self._on_contact_check_b_error)
+        self._contact_worker_b = worker
+
+        self.running_changed_b.emit(True)
+        self.contact_check_running_changed_b.emit(True)
+        worker.start()
+
+    def stop_contact_check_b(self) -> None:
+        if self._contact_worker_b is not None:
+            self._contact_worker_b.request_stop()
+
+    def _on_contact_check_b_point(self, point) -> None:
+        channel = self._contact_check_channel_b or "A"
+        self.contact_check_reading_b.emit(channel, point.voltage, point.current)
+
+    def _on_contact_check_b_finished(self, points: list, csv_path: str, aborted: bool) -> None:
+        self.running_changed_b.emit(False)
+        self.contact_check_running_changed_b.emit(False)
+        self._contact_worker_b = None
+        self._contact_check_channel_b = None
+
+    def _on_contact_check_b_error(self, message: str) -> None:
+        self.error_appended_b.emit(message)
+        self.error_b.emit(message)
+        self.running_changed_b.emit(False)
+        self.contact_check_running_changed_b.emit(False)
+        self._contact_worker_b = None
+        self._contact_check_channel_b = None

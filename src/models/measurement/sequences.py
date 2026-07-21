@@ -156,6 +156,79 @@ def run_dual_a_sequence(
         smu.set_output("smub", False)
 
 
+def run_contact_check_hold_sequence(
+    smu: AbstractSourceMeter,
+    channel: str,
+    compliance_current: float,
+    nplc: float,
+    is_aborted: Callable[[], bool],
+    sleep_fn: Callable[[float], None] = time.sleep,
+    poll_interval: float = 0.2,
+) -> Iterator[IVPoint]:
+    """接触確認(OPV式)シーケンス。0Vを保持し続け、電流を継続的に測定する。
+
+    本測定Configには依存しない軽量なシーケンス。``is_aborted()``がTrueになる
+    (=ユーザーが接触確認ボタンをOFFにする)まで無期限にループするため、
+    総点数は不定であり、進捗バーには使わない想定。
+    """
+    smu.reset()
+    smu.configure_source_voltage(channel, compliance_current, nplc)
+    smu.set_output(channel, True)
+    try:
+        while not is_aborted():
+            smu.set_voltage(channel, 0.0)
+            current = smu.measure_current(channel)
+            yield IVPoint(index=0, voltage=0.0, current=current)
+            sleep_fn(poll_interval)
+    finally:
+        smu.set_output(channel, False)
+
+
+def run_contact_check_ramp_sequence(
+    smu: AbstractSourceMeter,
+    channel: str,
+    compliance_current: float,
+    nplc: float,
+    threshold_current: float,
+    is_aborted: Callable[[], bool],
+    sleep_fn: Callable[[float], None] = time.sleep,
+    v_step: float = 0.05,
+    v_max: float = 20.0,
+    delay: float = 0.05,
+    poll_interval: float = 0.2,
+) -> Iterator[IVPoint]:
+    """接触確認(JVL式)シーケンス。0Vから電圧を徐々に上げ、電流が閾値に達したら
+    その電圧で出力を維持し続け、``is_aborted()``がTrueになる(=ユーザーが
+    停止ボタンを押す)まで電流を測定し続ける。閾値に達する前に``v_max``
+    (安全上限電圧)に達した場合は、素子保護のため出力を停止する。
+    """
+    smu.reset()
+    smu.configure_source_voltage(channel, compliance_current, nplc)
+    smu.set_output(channel, True)
+    voltage = 0.0
+    try:
+        threshold_reached = False
+        while not is_aborted() and voltage <= v_max:
+            smu.set_voltage(channel, voltage)
+            sleep_fn(delay)
+            current = smu.measure_current(channel)
+            yield IVPoint(index=0, voltage=voltage, current=current)
+            if abs(current) >= threshold_current:
+                threshold_reached = True
+                break
+            voltage += v_step
+
+        # 目標電流に到達した場合のみ、その電圧で出力を維持したまま
+        # ユーザーが停止するまで電流を読み続ける(v_max到達時は保護のため
+        # 保持せず、finallyで即座に出力を停止する)。
+        while threshold_reached and not is_aborted():
+            current = smu.measure_current(channel)
+            yield IVPoint(index=0, voltage=voltage, current=current)
+            sleep_fn(poll_interval)
+    finally:
+        smu.set_output(channel, False)
+
+
 def _hold_voltage(voltage_list: np.ndarray, hold_at_end: str) -> float:
     """掃引点数を使い切った後にチャンネルへ設定する保持電圧を返す。"""
     if hold_at_end == "last_value" and len(voltage_list) > 0:

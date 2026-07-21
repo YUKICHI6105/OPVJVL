@@ -6,6 +6,7 @@ objectName命名規則に厳密に従い、Pythonコードでウィジェット�
 from __future__ import annotations
 
 import os
+from typing import Optional
 
 import pyqtgraph as pg
 
@@ -18,6 +19,7 @@ from models.measurement.csv_writer import (
 )
 from viewmodels.dual_channel_viewmodel import DualChannelViewModel
 from views import tab_layout
+from views.notify_sound import play_completion_sound
 from views.plot_buffer import (
     DualAxisPlotBuffer,
     PlotBuffer,
@@ -64,6 +66,14 @@ class DualChannelTab(QtWidgets.QWidget):
         self._dual_b_bm9_port = ""
         self._dual_b_use_mock = False
 
+        # 接触確認の実行中フラグ(本測定用running_changedと接触確認用ボタンの
+        # enabled制御を分離するため、Viewが自身の状態として保持する)
+        self._contact_check_running_a = False
+        self._contact_check_running_b = False
+        # モードBの接触確認は物理SMU1台をchA/chBで共有するため、現在動作中の
+        # チャンネル("chA"/"chB")をViewで追跡し、ボタン表示・enabled制御に使う。
+        self._contact_check_active_prefix_b: Optional[str] = None
+
         # 共通保存設定パネル(MainWindow側)のウィジェット参照。
         # モードAのサンプル名/保存先にのみ流用する。
         # モードBは保存先・チャンネルA/Bのサンプル名を全てタブ内にローカル生成する
@@ -103,6 +113,25 @@ class DualChannelTab(QtWidgets.QWidget):
         self.viewModel.error_appended_b.connect(self._append_error_log_b)
         self.viewModel.error_b.connect(self._show_warning_b)
         self.viewModel.finished_ok_b.connect(self._on_finished_ok_b)
+
+        # 接触確認 モードA
+        self.dual_a_contactCheckButton.clicked.connect(self._on_mode_a_contact_check_clicked)
+        self.viewModel.contact_check_running_changed_a.connect(
+            self._on_contact_check_running_changed_a
+        )
+        self.viewModel.contact_check_reading_a.connect(self._on_contact_check_reading_a)
+
+        # 接触確認 モードB(チャンネルA/B)
+        self.dual_chA_contactCheckButton.clicked.connect(
+            lambda: self._on_channel_contact_check_clicked("chA")
+        )
+        self.dual_chB_contactCheckButton.clicked.connect(
+            lambda: self._on_channel_contact_check_clicked("chB")
+        )
+        self.viewModel.contact_check_running_changed_b.connect(
+            self._on_contact_check_running_changed_b
+        )
+        self.viewModel.contact_check_reading_b.connect(self._on_contact_check_reading_b)
 
     # ------------------------------------------------------------------
     # UI構築(ルート)
@@ -273,6 +302,31 @@ class DualChannelTab(QtWidgets.QWidget):
         dual_a_runRow.addWidget(self.dual_a_stopButton)
         dual_a_saveRunFormLayout.addRow(dual_a_runRow)
 
+        # 接触確認(deviceModeに応じてOPV式/JVL式を自動切替。JVL式は電流閾値到達後
+        # その電圧を維持し続け、停止ボタンで止めるまで保持する。v_maxは素子保護の
+        # ための安全上限電圧)
+        self.dual_a_contactCheckThresholdSpin = _make_double_spin(
+            "dual_a_contactCheckThresholdSpin", 0.0001, 1.0, 4, 0.0001, 0.001, "A"
+        )
+        self.dual_a_contactCheckVMaxSpin = _make_double_spin(
+            "dual_a_contactCheckVMaxSpin", 0.1, 20.0, 2, 0.1, 5.0, "V"
+        )
+        self.dual_a_contactCheckButton = QtWidgets.QPushButton(
+            "接触確認", objectName="dual_a_contactCheckButton"
+        )
+        self.dual_a_contactCheckReadingLabel = QtWidgets.QLabel(
+            "電流: -", objectName="dual_a_contactCheckReadingLabel"
+        )
+        dual_a_contactCheckRow = QtWidgets.QHBoxLayout()
+        dual_a_contactCheckRow.setObjectName("dual_a_contactCheckRow")
+        dual_a_contactCheckRow.addWidget(QtWidgets.QLabel("電流閾値[A]:"))
+        dual_a_contactCheckRow.addWidget(self.dual_a_contactCheckThresholdSpin)
+        dual_a_contactCheckRow.addWidget(QtWidgets.QLabel("最大電圧[V]:"))
+        dual_a_contactCheckRow.addWidget(self.dual_a_contactCheckVMaxSpin)
+        dual_a_saveRunFormLayout.addRow("接触確認:", dual_a_contactCheckRow)
+        dual_a_saveRunFormLayout.addRow(self.dual_a_contactCheckButton)
+        dual_a_saveRunFormLayout.addRow(self.dual_a_contactCheckReadingLabel)
+
         return [dual_a_measurementGroupBox, dual_a_saveRunGroupBox]
 
     # ------------------------------------------------------------------
@@ -347,6 +401,10 @@ class DualChannelTab(QtWidgets.QWidget):
             self.dual_chA_useBm9CheckBox,
             self.dual_chA_sampleNameEdit,
             self.dual_chA_hysteresisCheckBox,
+            self.dual_chA_contactCheckThresholdSpin,
+            self.dual_chA_contactCheckVMaxSpin,
+            self.dual_chA_contactCheckButton,
+            self.dual_chA_contactCheckReadingLabel,
             channelAGroupBox,
         ) = self._build_channel_group("chA", "チャンネルA (smua)")
         (
@@ -362,6 +420,10 @@ class DualChannelTab(QtWidgets.QWidget):
             self.dual_chB_useBm9CheckBox,
             self.dual_chB_sampleNameEdit,
             self.dual_chB_hysteresisCheckBox,
+            self.dual_chB_contactCheckThresholdSpin,
+            self.dual_chB_contactCheckVMaxSpin,
+            self.dual_chB_contactCheckButton,
+            self.dual_chB_contactCheckReadingLabel,
             channelBGroupBox,
         ) = self._build_channel_group("chB", "チャンネルB (smub)")
 
@@ -447,6 +509,31 @@ class DualChannelTab(QtWidgets.QWidget):
         )
         form_layout.addRow(hysteresis_checkbox)
 
+        # 接触確認(チャンネルのdevice_modeに応じてOPV式/JVL式を自動切替。
+        # モードBの物理SMUは1台共有のため、チャンネルA/Bの接触確認は
+        # ViewModel側で相互排他される)
+        contact_check_threshold_spin = _make_double_spin(
+            f"dual_{ch_prefix}_contactCheckThresholdSpin", 0.0001, 1.0, 4, 0.0001, 0.001, "A"
+        )
+        contact_check_v_max_spin = _make_double_spin(
+            f"dual_{ch_prefix}_contactCheckVMaxSpin", 0.1, 20.0, 2, 0.1, 5.0, "V"
+        )
+        contact_check_button = QtWidgets.QPushButton(
+            "接触確認", objectName=f"dual_{ch_prefix}_contactCheckButton"
+        )
+        contact_check_reading_label = QtWidgets.QLabel(
+            "電流: -", objectName=f"dual_{ch_prefix}_contactCheckReadingLabel"
+        )
+        contact_check_row = QtWidgets.QHBoxLayout()
+        contact_check_row.setObjectName(f"dual_{ch_prefix}_contactCheckRow")
+        contact_check_row.addWidget(QtWidgets.QLabel("電流閾値[A]:"))
+        contact_check_row.addWidget(contact_check_threshold_spin)
+        contact_check_row.addWidget(QtWidgets.QLabel("最大電圧[V]:"))
+        contact_check_row.addWidget(contact_check_v_max_spin)
+        form_layout.addRow("接触確認:", contact_check_row)
+        form_layout.addRow(contact_check_button)
+        form_layout.addRow(contact_check_reading_label)
+
         return (
             enable_checkbox,
             device_mode_combo,
@@ -460,6 +547,10 @@ class DualChannelTab(QtWidgets.QWidget):
             use_bm9_checkbox,
             sample_name_edit,
             hysteresis_checkbox,
+            contact_check_threshold_spin,
+            contact_check_v_max_spin,
+            contact_check_button,
+            contact_check_reading_label,
             group_box,
         )
 
@@ -560,6 +651,20 @@ class DualChannelTab(QtWidgets.QWidget):
     def _on_mode_a_stop_clicked(self) -> None:
         self.viewModel.stop_mode_a()
 
+    def _on_mode_a_contact_check_clicked(self) -> None:
+        if self._contact_check_running_a:
+            self.viewModel.stop_contact_check_a()
+        else:
+            self.viewModel.start_contact_check_a(
+                self.dual_a_deviceModeCombo.currentText(),
+                self._dual_a_connection,
+                self._dual_a_use_mock,
+                self.dual_a_complianceSpin.value(),
+                self.dual_a_nplcSpin.value(),
+                self.dual_a_contactCheckThresholdSpin.value(),
+                self.dual_a_contactCheckVMaxSpin.value(),
+            )
+
     def _on_mode_b_start_clicked(self) -> None:
         if not ensure_save_dir(self, self.dual_b_saveDirEdit):
             return
@@ -647,6 +752,34 @@ class DualChannelTab(QtWidgets.QWidget):
     def _on_mode_b_stop_clicked(self) -> None:
         self.viewModel.stop_mode_b()
 
+    def _on_channel_contact_check_clicked(self, prefix: str) -> None:
+        """モードB: チャンネルA/B共通の接触確認ボタンハンドラ(`prefix`は"chA"/"chB")。"""
+        if self._contact_check_active_prefix_b == prefix:
+            self.viewModel.stop_contact_check_b()
+            return
+        if self._contact_check_active_prefix_b is not None:
+            return  # 他方のチャンネルが接触確認中(同一スロットのため多重起動しない)
+
+        target_channel = "smua" if prefix == "chA" else "smub"
+        device_mode_combo = getattr(self, f"dual_{prefix}_deviceModeCombo")
+        nplc_spin = getattr(self, f"dual_{prefix}_nplcSpin")
+        threshold_spin = getattr(self, f"dual_{prefix}_contactCheckThresholdSpin")
+        v_max_spin = getattr(self, f"dual_{prefix}_contactCheckVMaxSpin")
+        # モードBのChannelConfigにはコンプライアンス電流の入力欄がなく
+        # (既定値0.02を常に使用)、接触確認もそれに合わせる。
+        compliance_current = ChannelConfig().compliance_current
+        self._contact_check_active_prefix_b = prefix
+        self.viewModel.start_contact_check_b(
+            target_channel,
+            device_mode_combo.currentText(),
+            self._dual_b_connection,
+            self._dual_b_use_mock,
+            compliance_current,
+            nplc_spin.value(),
+            threshold_spin.value(),
+            v_max_spin.value(),
+        )
+
     # ------------------------------------------------------------------
     # ViewModelからのシグナル受信ハンドラ (モードA)
     # ------------------------------------------------------------------
@@ -656,6 +789,11 @@ class DualChannelTab(QtWidgets.QWidget):
         self.dual_a_deviceModeCombo.setEnabled(not running)
         self.dual_a_hysteresisCheckBox.setEnabled(not running)
         self.dual_modeSelectCombo.setEnabled(not running)
+        # running_changed_aは本測定と接触確認の両方から発火される共有シグナル
+        # (MainWindow側のクロスタブ排他ロックが流用するため)。接触確認ボタン
+        # 自体は自身の状態(_contact_check_running_a)でのみ制御する。
+        if not self._contact_check_running_a:
+            self.dual_a_contactCheckButton.setEnabled(not running)
 
     def _on_progress_changed_a(self, current: int, total: int) -> None:
         self.dual_a_progressBar.setMaximum(max(total, 1))
@@ -682,6 +820,18 @@ class DualChannelTab(QtWidgets.QWidget):
 
     def _on_finished_ok_a(self, points: list, csv_path: str, aborted: bool) -> None:
         self._last_result_a = (points, self.dual_a_deviceModeCombo.currentText())
+        play_completion_sound("aborted" if aborted else "success")
+
+    def _on_contact_check_running_changed_a(self, running: bool) -> None:
+        self._contact_check_running_a = running
+        self.dual_a_contactCheckButton.setText("接触確認を停止" if running else "接触確認")
+        self.dual_a_contactCheckButton.setEnabled(True)
+        if not running:
+            self.dual_a_contactCheckReadingLabel.setText("電流: -")
+        self.dual_a_startButton.setEnabled(not running)
+
+    def _on_contact_check_reading_a(self, voltage: float, current: float) -> None:
+        self.dual_a_contactCheckReadingLabel.setText(f"電流: {current:.6e} A (V={voltage:.3f})")
 
     # ------------------------------------------------------------------
     # ViewModelからのシグナル受信ハンドラ (モードB)
@@ -704,6 +854,13 @@ class DualChannelTab(QtWidgets.QWidget):
             getattr(self, f"dual_{prefix}_useBm9CheckBox").setEnabled(not running)
             getattr(self, f"dual_{prefix}_sampleNameEdit").setEnabled(not running)
             getattr(self, f"dual_{prefix}_hysteresisCheckBox").setEnabled(not running)
+
+        # running_changed_bは本測定と接触確認(chA/chB共有スロット)の両方から
+        # 発火される共有シグナル。接触確認ボタン自体は自身の状態
+        # (_contact_check_running_b)でのみ制御する。
+        if not self._contact_check_running_b:
+            self.dual_chA_contactCheckButton.setEnabled(not running)
+            self.dual_chB_contactCheckButton.setEnabled(not running)
 
     def _on_progress_changed_b(self, current: int, total: int) -> None:
         self.dual_b_progressBar.setMaximum(max(total, 1))
@@ -740,6 +897,7 @@ class DualChannelTab(QtWidgets.QWidget):
     def _on_finished_ok_b(
         self, points: list, csv_path_a: str, csv_path_b: str, aborted: bool
     ) -> None:
+        play_completion_sound("aborted" if aborted else "success")
         chan_a_points = [p for p in points if p.channel == "A"]
         chan_b_points = [p for p in points if p.channel == "B"]
 
@@ -763,6 +921,29 @@ class DualChannelTab(QtWidgets.QWidget):
             "B": (chan_b_points, device_mode_b, use_luminance_b),
         }
 
+    def _on_contact_check_running_changed_b(self, running: bool) -> None:
+        self._contact_check_running_b = running
+        active_prefix = self._contact_check_active_prefix_b
+        for prefix in ("chA", "chB"):
+            button = getattr(self, f"dual_{prefix}_contactCheckButton")
+            if running and prefix == active_prefix:
+                button.setText("接触確認を停止")
+                button.setEnabled(True)
+            else:
+                button.setText("接触確認")
+                # 動作中は非アクティブ側を無効化し、同一スロットの多重起動を防ぐ
+                button.setEnabled(not running)
+        if not running:
+            self.dual_chA_contactCheckReadingLabel.setText("電流: -")
+            self.dual_chB_contactCheckReadingLabel.setText("電流: -")
+            self._contact_check_active_prefix_b = None
+        self.dual_b_startButton.setEnabled(not running)
+
+    def _on_contact_check_reading_b(self, channel: str, voltage: float, current: float) -> None:
+        prefix = "chA" if channel == "A" else "chB"
+        label = getattr(self, f"dual_{prefix}_contactCheckReadingLabel")
+        label.setText(f"電流: {current:.6e} A (V={voltage:.3f})")
+
     # ------------------------------------------------------------------
     # 設定の永続化(MainWindowが起動時restore/終了時saveに使用)
     # ------------------------------------------------------------------
@@ -782,6 +963,8 @@ class DualChannelTab(QtWidgets.QWidget):
             "dual_a_delay": self.dual_a_delaySpin,
             "dual_a_compliance": self.dual_a_complianceSpin,
             "dual_a_hysteresis": self.dual_a_hysteresisCheckBox,
+            "dual_a_contact_check_threshold": self.dual_a_contactCheckThresholdSpin,
+            "dual_a_contact_check_v_max": self.dual_a_contactCheckVMaxSpin,
             # モードB(共通)
             "dual_b_save_dir": self.dual_b_saveDirEdit,
         }
@@ -798,6 +981,12 @@ class DualChannelTab(QtWidgets.QWidget):
                 f"dual_{prefix}_use_bm9": getattr(self, f"dual_{prefix}_useBm9CheckBox"),
                 f"dual_{prefix}_sample_name": getattr(self, f"dual_{prefix}_sampleNameEdit"),
                 f"dual_{prefix}_hysteresis": getattr(self, f"dual_{prefix}_hysteresisCheckBox"),
+                f"dual_{prefix}_contact_check_threshold": getattr(
+                    self, f"dual_{prefix}_contactCheckThresholdSpin"
+                ),
+                f"dual_{prefix}_contact_check_v_max": getattr(
+                    self, f"dual_{prefix}_contactCheckVMaxSpin"
+                ),
             })
         return widgets
 

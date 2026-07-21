@@ -15,6 +15,7 @@ from models.measurement.config import JVLConfig
 from models.measurement.csv_writer import jvl_csv_filename, save_points_csv
 from viewmodels.jvl_viewmodel import JVLViewModel
 from views import tab_layout
+from views.notify_sound import play_completion_sound
 from views.plot_buffer import (
     DualAxisPlotBuffer,
     PlotBuffer,
@@ -50,6 +51,7 @@ class JVLTab(QtWidgets.QWidget):
         self._channel = "smua"
         self._use_mock = False
         self._last_result = None  # (points, include_luminance) 最後に完了/中断した測定結果
+        self._contact_check_running = False
         self._build_ui()
 
         # ViewModelの保持と結線(結線はView側の責務。__init__から一度だけ行う)
@@ -69,6 +71,11 @@ class JVLTab(QtWidgets.QWidget):
         self.viewModel.error_appended.connect(self._append_error_log)
         self.viewModel.error.connect(self._show_warning)
         self.viewModel.finished_ok.connect(self._on_finished_ok)
+
+        # 接触確認(JVL式)
+        self.jvl_contactCheckButton.clicked.connect(self._on_contact_check_clicked)
+        self.viewModel.contact_check_running_changed.connect(self._on_contact_check_running_changed)
+        self.viewModel.contact_check_reading.connect(self._on_contact_check_reading)
 
     # ------------------------------------------------------------------
     # UI構築
@@ -120,6 +127,33 @@ class JVLTab(QtWidgets.QWidget):
         self.jvl_stopButton = save_run_widgets["stop"]
         if save_run_widgets["browse"] is not None:
             self.jvl_browseSaveDirButton = save_run_widgets["browse"]
+
+        # 接触確認(JVL式: 0Vから昇圧し、電流閾値到達後はその電圧を維持し続け、
+        # 停止ボタンで止めるまで保持する。v_maxは素子保護のための安全上限電圧)
+        self.jvl_contactCheckThresholdSpin = tab_layout.make_double_spin(
+            "jvl_contactCheckThresholdSpin", 0.0001, 1.0, 4, 0.0001, 0.001, "A"
+        )
+        self.jvl_contactCheckVMaxSpin = tab_layout.make_double_spin(
+            "jvl_contactCheckVMaxSpin", 0.1, 20.0, 2, 0.1, 5.0, "V"
+        )
+        self.jvl_contactCheckButton = QtWidgets.QPushButton(
+            "接触確認", objectName="jvl_contactCheckButton"
+        )
+        self.jvl_contactCheckReadingLabel = QtWidgets.QLabel(
+            "電流: -", objectName="jvl_contactCheckReadingLabel"
+        )
+        jvl_contactCheckFormLayout = QtWidgets.QFormLayout()
+        jvl_contactCheckFormLayout.setObjectName("jvl_contactCheckFormLayout")
+        jvl_contactCheckRow = QtWidgets.QHBoxLayout()
+        jvl_contactCheckRow.setObjectName("jvl_contactCheckRow")
+        jvl_contactCheckRow.addWidget(QtWidgets.QLabel("電流閾値[A]:"))
+        jvl_contactCheckRow.addWidget(self.jvl_contactCheckThresholdSpin)
+        jvl_contactCheckRow.addWidget(QtWidgets.QLabel("最大電圧[V]:"))
+        jvl_contactCheckRow.addWidget(self.jvl_contactCheckVMaxSpin)
+        jvl_contactCheckFormLayout.addRow("接触確認:", jvl_contactCheckRow)
+        jvl_saveRunGroupBox.layout().addLayout(jvl_contactCheckFormLayout)
+        jvl_saveRunGroupBox.layout().addWidget(self.jvl_contactCheckButton)
+        jvl_saveRunGroupBox.layout().addWidget(self.jvl_contactCheckReadingLabel)
 
         # 表示パネル側のウィジェット(JVLは2ページ構成のプロットタブ)
         self.jvl_progressBar = QtWidgets.QProgressBar(objectName="jvl_progressBar")
@@ -233,6 +267,21 @@ class JVLTab(QtWidgets.QWidget):
     def _on_stop_clicked(self) -> None:
         self.viewModel.stop_measurement()
 
+    def _on_contact_check_clicked(self) -> None:
+        if self._contact_check_running:
+            self.viewModel.stop_contact_check()
+        else:
+            self.viewModel.start_contact_check(
+                self._device_type,
+                self._connection,
+                self._channel,
+                self._use_mock,
+                self.jvl_complianceSpin.value(),
+                self.jvl_nplcSpin.value(),
+                self.jvl_contactCheckThresholdSpin.value(),
+                self.jvl_contactCheckVMaxSpin.value(),
+            )
+
     # ------------------------------------------------------------------
     # ViewModelからのシグナル受信ハンドラ
     # ------------------------------------------------------------------
@@ -241,6 +290,19 @@ class JVLTab(QtWidgets.QWidget):
         self.jvl_stopButton.setEnabled(running)
         self.jvl_useLuminanceCheckBox.setEnabled(not running)
         self.jvl_hysteresisCheckBox.setEnabled(not running)
+        if not self._contact_check_running:
+            self.jvl_contactCheckButton.setEnabled(not running)
+
+    def _on_contact_check_running_changed(self, running: bool) -> None:
+        self._contact_check_running = running
+        self.jvl_contactCheckButton.setText("接触確認を停止" if running else "接触確認")
+        self.jvl_contactCheckButton.setEnabled(True)
+        if not running:
+            self.jvl_contactCheckReadingLabel.setText("電流: -")
+        self.jvl_startButton.setEnabled(not running)
+
+    def _on_contact_check_reading(self, voltage: float, current: float) -> None:
+        self.jvl_contactCheckReadingLabel.setText(f"電流: {current:.6e} A (V={voltage:.3f})")
 
     def _on_point_measured(self, point) -> None:
         luminance = getattr(point, "luminance", None)
@@ -260,6 +322,7 @@ class JVLTab(QtWidgets.QWidget):
 
     def _on_finished_ok(self, points: list, csv_path: str, aborted: bool) -> None:
         self._last_result = (points, self.jvl_useLuminanceCheckBox.isChecked())
+        play_completion_sound("aborted" if aborted else "success")
 
     # ------------------------------------------------------------------
     # 別名保存(ファイルメニュー「測定データを別名保存...」/Ctrl+S)
@@ -301,6 +364,8 @@ class JVLTab(QtWidgets.QWidget):
             "jvl_compliance": self.jvl_complianceSpin,
             "jvl_use_luminance": self.jvl_useLuminanceCheckBox,
             "jvl_hysteresis": self.jvl_hysteresisCheckBox,
+            "jvl_contact_check_threshold": self.jvl_contactCheckThresholdSpin,
+            "jvl_contact_check_v_max": self.jvl_contactCheckVMaxSpin,
         }
 
     def _on_browse_save_dir(self) -> None:

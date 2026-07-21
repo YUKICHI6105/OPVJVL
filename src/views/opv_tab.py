@@ -14,6 +14,7 @@ from models.measurement.config import OPVConfig
 from models.measurement.csv_writer import opv_csv_filename, save_points_csv
 from viewmodels.opv_viewmodel import OPVViewModel
 from views import tab_layout
+from views.notify_sound import play_completion_sound
 from views.plot_buffer import PlotBuffer, install_auto_range_menu, set_iv_axis_labels
 from views.save_confirm import confirm_overwrite, ensure_save_dir
 
@@ -40,6 +41,7 @@ class OPVTab(QtWidgets.QWidget):
         self._channel = "smua"
         self._use_mock = False
         self._last_result = None  # (points, include_luminance) 最後に完了/中断した測定結果
+        self._contact_check_running = False
         self._build_ui()
 
         # ViewModelの保持と結線(結線はView側の責務。__init__から一度だけ行う)
@@ -59,6 +61,11 @@ class OPVTab(QtWidgets.QWidget):
         self.viewModel.error_appended.connect(self._append_error_log)
         self.viewModel.error.connect(self._show_warning)
         self.viewModel.finished_ok.connect(self._on_finished_ok)
+
+        # 接触確認(OPV式)
+        self.opv_contactCheckButton.clicked.connect(self._on_contact_check_clicked)
+        self.viewModel.contact_check_running_changed.connect(self._on_contact_check_running_changed)
+        self.viewModel.contact_check_reading.connect(self._on_contact_check_reading)
 
     # ------------------------------------------------------------------
     # UI構築
@@ -99,6 +106,16 @@ class OPVTab(QtWidgets.QWidget):
         self.opv_stopButton = save_run_widgets["stop"]
         if save_run_widgets["browse"] is not None:
             self.opv_browseSaveDirButton = save_run_widgets["browse"]
+
+        # 接触確認(OPV式: 0V印加を継続し電流を表示するトグル動作)
+        self.opv_contactCheckButton = QtWidgets.QPushButton(
+            "接触確認", objectName="opv_contactCheckButton"
+        )
+        self.opv_contactCheckReadingLabel = QtWidgets.QLabel(
+            "電流: -", objectName="opv_contactCheckReadingLabel"
+        )
+        opv_saveRunGroupBox.layout().addWidget(self.opv_contactCheckButton)
+        opv_saveRunGroupBox.layout().addWidget(self.opv_contactCheckReadingLabel)
 
         # 表示パネル側のウィジェット
         self.opv_progressBar = QtWidgets.QProgressBar(objectName="opv_progressBar")
@@ -179,13 +196,44 @@ class OPVTab(QtWidgets.QWidget):
     def _on_stop_clicked(self) -> None:
         self.viewModel.stop_measurement()
 
+    def _on_contact_check_clicked(self) -> None:
+        if self._contact_check_running:
+            self.viewModel.stop_contact_check()
+        else:
+            self.viewModel.start_contact_check(
+                self._device_type,
+                self._connection,
+                self._channel,
+                self._use_mock,
+                self.opv_complianceSpin.value(),
+                self.opv_nplcSpin.value(),
+            )
+
     # ------------------------------------------------------------------
     # ViewModelからのシグナル受信ハンドラ
     # ------------------------------------------------------------------
     def _on_running_changed(self, running: bool) -> None:
+        # running_changedは本測定と接触確認の両方から発火される共有シグナル
+        # (MainWindow側のクロスタブ排他ロックが流用するため)。本測定用の
+        # start/stopボタン制御は、接触確認自身によるrunning=Trueでも意味を
+        # 持つため素直に反映してよいが、接触確認ボタン自体は自身の状態
+        # (_contact_check_running)でのみ制御し、ここでは触れない。
         self.opv_startButton.setEnabled(not running)
         self.opv_stopButton.setEnabled(running)
         self.opv_hysteresisCheckBox.setEnabled(not running)
+        if not self._contact_check_running:
+            self.opv_contactCheckButton.setEnabled(not running)
+
+    def _on_contact_check_running_changed(self, running: bool) -> None:
+        self._contact_check_running = running
+        self.opv_contactCheckButton.setText("接触確認を停止" if running else "接触確認")
+        self.opv_contactCheckButton.setEnabled(True)
+        if not running:
+            self.opv_contactCheckReadingLabel.setText("電流: -")
+        self.opv_startButton.setEnabled(not running)
+
+    def _on_contact_check_reading(self, voltage: float, current: float) -> None:
+        self.opv_contactCheckReadingLabel.setText(f"電流: {current:.6e} A (V={voltage:.3f})")
 
     def _on_point_measured(self, point) -> None:
         if self._plot_buffer is not None:
@@ -202,6 +250,7 @@ class OPVTab(QtWidgets.QWidget):
 
     def _on_finished_ok(self, points: list, csv_path: str, aborted: bool) -> None:
         self._last_result = (points, False)
+        play_completion_sound("aborted" if aborted else "success")
 
     # ------------------------------------------------------------------
     # 別名保存(ファイルメニュー「測定データを別名保存...」/Ctrl+S)
