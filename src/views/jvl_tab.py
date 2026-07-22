@@ -15,7 +15,7 @@ from models.measurement.config import JVLConfig
 from models.measurement.csv_writer import jvl_csv_filename, save_points_csv
 from viewmodels.jvl_viewmodel import JVLViewModel
 from views import tab_layout
-from views.notify_sound import play_completion_sound
+from views.notify_sound import dismiss_completion_alarm, play_completion_sound
 from views.plot_buffer import (
     DualAxisPlotBuffer,
     PlotBuffer,
@@ -23,6 +23,7 @@ from views.plot_buffer import (
     set_iv_axis_labels,
     setup_luminance_axis,
 )
+from views.progress_bar import set_measurement_completed
 from views.save_confirm import confirm_overwrite, ensure_save_dir
 
 
@@ -249,6 +250,8 @@ class JVLTab(QtWidgets.QWidget):
         if not confirm_overwrite(self, [planned_path]):
             return
         total_points = len(config.build_voltage_list())
+        dismiss_completion_alarm()
+        set_measurement_completed(self.jvl_progressBar, False)
         self.jvl_progressBar.setMaximum(max(total_points, 1))
         self.jvl_progressBar.setValue(0)
         reverse_from_index = config.forward_point_count() if config.hysteresis else None
@@ -265,7 +268,10 @@ class JVLTab(QtWidgets.QWidget):
         self.viewModel.start_measurement(config)
 
     def _on_stop_clicked(self) -> None:
-        self.viewModel.stop_measurement()
+        if self._contact_check_running:
+            self.viewModel.stop_contact_check()
+        else:
+            self.viewModel.stop_measurement()
 
     def _on_contact_check_clicked(self) -> None:
         if self._contact_check_running:
@@ -322,7 +328,8 @@ class JVLTab(QtWidgets.QWidget):
 
     def _on_finished_ok(self, points: list, csv_path: str, aborted: bool) -> None:
         self._last_result = (points, self.jvl_useLuminanceCheckBox.isChecked())
-        play_completion_sound("aborted" if aborted else "success")
+        set_measurement_completed(self.jvl_progressBar, not aborted)
+        play_completion_sound("aborted" if aborted else "success", self)
 
     # ------------------------------------------------------------------
     # 別名保存(ファイルメニュー「測定データを別名保存...」/Ctrl+S)

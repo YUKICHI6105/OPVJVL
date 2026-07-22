@@ -19,7 +19,7 @@ from models.measurement.csv_writer import (
 )
 from viewmodels.dual_channel_viewmodel import DualChannelViewModel
 from views import tab_layout
-from views.notify_sound import play_completion_sound
+from views.notify_sound import dismiss_completion_alarm, play_completion_sound
 from views.plot_buffer import (
     DualAxisPlotBuffer,
     PlotBuffer,
@@ -27,6 +27,7 @@ from views.plot_buffer import (
     set_iv_axis_labels,
     setup_luminance_axis,
 )
+from views.progress_bar import set_measurement_completed
 from views.save_confirm import confirm_overwrite, ensure_save_dir
 from views.tab_layout import make_double_spin as _make_double_spin
 
@@ -634,6 +635,8 @@ class DualChannelTab(QtWidgets.QWidget):
         if not confirm_overwrite(self, [planned_path]):
             return
         total_points = len(config.build_voltage_list())
+        dismiss_completion_alarm()
+        set_measurement_completed(self.dual_a_progressBar, False)
         self.dual_a_progressBar.setMaximum(max(total_points, 1))
         self.dual_a_progressBar.setValue(0)
         reverse_from_index = config.forward_point_count() if config.hysteresis else None
@@ -649,7 +652,10 @@ class DualChannelTab(QtWidgets.QWidget):
         self.viewModel.start_mode_a(config)
 
     def _on_mode_a_stop_clicked(self) -> None:
-        self.viewModel.stop_mode_a()
+        if self._contact_check_running_a:
+            self.viewModel.stop_contact_check_a()
+        else:
+            self.viewModel.stop_mode_a()
 
     def _on_mode_a_contact_check_clicked(self) -> None:
         if self._contact_check_running_a:
@@ -708,6 +714,8 @@ class DualChannelTab(QtWidgets.QWidget):
         va_len = len(chan_a.build_voltage_list()) if chan_a.enabled else 0
         vb_len = len(chan_b.build_voltage_list()) if chan_b.enabled else 0
         total_points = va_len + vb_len
+        dismiss_completion_alarm()
+        set_measurement_completed(self.dual_b_progressBar, False)
         self.dual_b_progressBar.setMaximum(max(total_points, 1))
         self.dual_b_progressBar.setValue(0)
 
@@ -750,7 +758,10 @@ class DualChannelTab(QtWidgets.QWidget):
         self.viewModel.start_mode_b(config)
 
     def _on_mode_b_stop_clicked(self) -> None:
-        self.viewModel.stop_mode_b()
+        if self._contact_check_running_b:
+            self.viewModel.stop_contact_check_b()
+        else:
+            self.viewModel.stop_mode_b()
 
     def _on_channel_contact_check_clicked(self, prefix: str) -> None:
         """モードB: チャンネルA/B共通の接触確認ボタンハンドラ(`prefix`は"chA"/"chB")。"""
@@ -820,7 +831,8 @@ class DualChannelTab(QtWidgets.QWidget):
 
     def _on_finished_ok_a(self, points: list, csv_path: str, aborted: bool) -> None:
         self._last_result_a = (points, self.dual_a_deviceModeCombo.currentText())
-        play_completion_sound("aborted" if aborted else "success")
+        set_measurement_completed(self.dual_a_progressBar, not aborted)
+        play_completion_sound("aborted" if aborted else "success", self)
 
     def _on_contact_check_running_changed_a(self, running: bool) -> None:
         self._contact_check_running_a = running
@@ -897,7 +909,8 @@ class DualChannelTab(QtWidgets.QWidget):
     def _on_finished_ok_b(
         self, points: list, csv_path_a: str, csv_path_b: str, aborted: bool
     ) -> None:
-        play_completion_sound("aborted" if aborted else "success")
+        set_measurement_completed(self.dual_b_progressBar, not aborted)
+        play_completion_sound("aborted" if aborted else "success", self)
         chan_a_points = [p for p in points if p.channel == "A"]
         chan_b_points = [p for p in points if p.channel == "B"]
 

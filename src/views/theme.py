@@ -247,6 +247,10 @@ QProgressBar::chunk {
     border-radius: 2px;
 }
 
+QProgressBar[measurementCompleted="true"]::chunk {
+    background-color: #2ea043;
+}
+
 QPlainTextEdit {
     background-color: #0b0e12;
     border: 1px solid #3e3e42;

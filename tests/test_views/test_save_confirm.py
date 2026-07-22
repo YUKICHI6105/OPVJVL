@@ -11,7 +11,7 @@ def test_no_existing_paths_skips_dialog(tmp_path, monkeypatch):
     """存在するパスが1つも無ければダイアログを出さずTrueを返す。"""
     calls = []
     monkeypatch.setattr(
-        QtWidgets.QMessageBox, "question", lambda *a, **kw: calls.append(1)
+        QtWidgets.QMessageBox, "warning", lambda *a, **kw: calls.append(1)
     )
 
     missing_path = str(tmp_path / "not_exists.csv")
@@ -27,11 +27,11 @@ def test_existing_path_shows_dialog_and_respects_yes(tmp_path, monkeypatch):
     yes_value = enum_value(QtWidgets.QMessageBox, "Yes")
     calls = []
 
-    def fake_question(*args, **kwargs):
+    def fake_warning(*args, **kwargs):
         calls.append(args)
         return yes_value
 
-    monkeypatch.setattr(QtWidgets.QMessageBox, "question", fake_question)
+    monkeypatch.setattr(QtWidgets.QMessageBox, "warning", fake_warning)
 
     assert confirm_overwrite(None, [str(existing)]) is True
     assert len(calls) == 1
@@ -44,7 +44,7 @@ def test_existing_path_cancel_returns_false(tmp_path, monkeypatch):
 
     cancel_value = enum_value(QtWidgets.QMessageBox, "Cancel")
     monkeypatch.setattr(
-        QtWidgets.QMessageBox, "question", lambda *a, **kw: cancel_value
+        QtWidgets.QMessageBox, "warning", lambda *a, **kw: cancel_value
     )
 
     assert confirm_overwrite(None, [str(existing)]) is False
@@ -59,11 +59,11 @@ def test_mixed_existing_and_missing_paths(tmp_path, monkeypatch):
     yes_value = enum_value(QtWidgets.QMessageBox, "Yes")
     captured = {}
 
-    def fake_question(parent, title, message, *args, **kwargs):
+    def fake_warning(parent, title, message, *args, **kwargs):
         captured["message"] = message
         return yes_value
 
-    monkeypatch.setattr(QtWidgets.QMessageBox, "question", fake_question)
+    monkeypatch.setattr(QtWidgets.QMessageBox, "warning", fake_warning)
 
     assert confirm_overwrite(None, [str(existing), missing]) is True
     assert os.path.basename(str(existing)) in captured["message"]

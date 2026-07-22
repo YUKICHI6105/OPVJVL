@@ -58,7 +58,8 @@ def confirm_overwrite(parent, paths: Sequence[str]) -> bool:
     message = f"同名のファイルが存在します。上書きしますか?\n\n{file_list}"
     yes_button = enum_value(QtWidgets.QMessageBox, "Yes")
     cancel_button = enum_value(QtWidgets.QMessageBox, "Cancel")
-    result = QtWidgets.QMessageBox.question(
+    # Warningタイプを使用し、Windows標準の警告音と警告アイコンを出す。
+    result = QtWidgets.QMessageBox.warning(
         parent,
         "上書き確認",
         message,
