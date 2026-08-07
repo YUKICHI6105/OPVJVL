@@ -184,8 +184,10 @@ class MainWindow(QtWidgets.QMainWindow):
         leftColumnLayout = QtWidgets.QVBoxLayout(leftColumnWidget)
         leftColumnLayout.setObjectName("leftColumnLayout")
         leftColumnLayout.setContentsMargins(4, 4, 4, 4)
-        leftColumnWidget.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
-        leftColumnWidget.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
+        # 左カラムは固定幅にする。可変レンジ(旧: 420〜600)では、タブ/モードごとに
+        # 必要最小幅が違うことと、共通保存設定パネルの表示切替(モードB)によって、
+        # タブを切り替えるたびに設定カラムの横幅が変わってしまっていた。
+        leftColumnWidget.setFixedWidth(theme.SETTINGS_PANEL_WIDTH)
 
         self.sharedSaveGroupBox = self._build_shared_save_group()
         leftColumnLayout.addWidget(self.sharedSaveGroupBox, 0)
@@ -209,9 +211,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mainTabWidget.addTab(self.opv_tab, "OPVモード")
         self.mainTabWidget.addTab(self.jvl_tab, "JVLモード")
         self.mainTabWidget.addTab(self.dual_channel_tab, "2ch活用モード")
-        # mainTabWidgetはstretch=0で「内容ぶんの高さ」に留め、
-        # 残りの縦スペースは全て下の「ログ」グループへ回す。
-        leftColumnLayout.addWidget(self.mainTabWidget, 0)
+        # 縦の余剰スペースは設定タブ側へ回す(stretch=1)。以前はここがstretch=0で
+        # 「内容ぶんの高さ」に固定され、余りが全てログへ流れていたため、ウィンドウを
+        # 高くするほどログだけが伸び、設定欄は項目の多いタブ(2ch活用モードB等)でも
+        # 狭いままスクロールを強いられていた。
+        leftColumnLayout.addWidget(self.mainTabWidget, 1)
 
         logGroupBox = QtWidgets.QGroupBox("ログ", objectName="logGroupBox")
         logGroupLayout = QtWidgets.QVBoxLayout(logGroupBox)
@@ -221,7 +225,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.logStack.addWidget(self.jvl_tab.log_widget())
         self.logStack.addWidget(self.dual_channel_tab.log_widget())
         logGroupLayout.addWidget(self.logStack)
-        leftColumnLayout.addWidget(logGroupBox, 1)
+        # ログは一定の高さに留める(stretch=0 + 固定高)。ウィンドウを高くしたぶんは
+        # 設定欄の表示に使う。
+        logGroupBox.setFixedHeight(theme.LOG_PANEL_HEIGHT)
+        leftColumnLayout.addWidget(logGroupBox, 0)
 
         centralSplitter.addWidget(leftColumnWidget)
 
@@ -280,8 +287,9 @@ class MainWindow(QtWidgets.QMainWindow):
         size_policy_fixed = enum_value(QtWidgets.QSizePolicy, "Maximum")
         size_policy_preferred = enum_value(QtWidgets.QSizePolicy, "Preferred")
         sharedSaveGroupBox.setSizePolicy(size_policy_preferred, size_policy_fixed)
-        sharedSaveGroupBox.setMinimumWidth(theme.SETTINGS_PANEL_MIN_WIDTH)
-        sharedSaveGroupBox.setMaximumWidth(theme.SETTINGS_PANEL_MAX_WIDTH)
+        # 横幅は左カラム(固定幅)いっぱいに広がればよい。ここで最小幅として
+        # カラム幅そのものを指定すると、カラム内側の余白のぶんだけ幅が足りず
+        # 左カラムを押し広げてしまうため、最小/最大幅は指定しない。
 
         sharedSaveFormLayout = QtWidgets.QFormLayout(sharedSaveGroupBox)
         sharedSaveFormLayout.setObjectName("sharedSaveFormLayout")

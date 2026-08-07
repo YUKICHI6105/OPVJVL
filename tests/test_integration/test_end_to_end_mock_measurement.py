@@ -41,8 +41,12 @@ def test_e2e_opv_measurement(qtbot, tmp_path):
     expected_csv = tmp_path / "e2e_opv_test_OPV_measurement_data.csv"
     assert os.path.exists(expected_csv)
 
-    # 終了後にボタン状態が復元していることを検証
-    assert tab.opv_startButton.isEnabled()
+    # 終了後にボタン状態が復元していることを検証。
+    # ボタンを戻す `running_changed` はワーカースレッドからメインスレッドへの
+    # キューイング接続で配送されるため、スレッドの終了(`isRunning()`がFalse)と
+    # 同時に反映されるとは限らない。直後にassertすると低頻度で落ちるので、
+    # 配送されるまで待ってから検証する。
+    qtbot.waitUntil(lambda: tab.opv_startButton.isEnabled(), timeout=5000)
     assert not tab.opv_stopButton.isEnabled()
 
 

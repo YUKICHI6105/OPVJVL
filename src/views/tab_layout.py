@@ -21,6 +21,12 @@ from qtcompat import Qt, QtWidgets, enum_value
 from views.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
 
 
+# スピンボックスの最大幅。設定カラムを狭めるための上限だが、狭くしすぎると
+# 桁数の多い値(例: 電圧掃引の -20.000)が見切れる。実測でスピンボックス自身が
+# 必要とする幅は最大71pxのため、その直上の72pxを共通の上限とする。
+_SPIN_MAX_WIDTH = 72
+
+
 def make_double_spin(
     object_name: str,
     minimum: float,
@@ -30,7 +36,7 @@ def make_double_spin(
     value: float,
     suffix: str = "",
 ) -> QtWidgets.QDoubleSpinBox:
-    """全タブ共通仕様(最大幅80px・ホイール無効)のDoubleSpinBoxを生成する。"""
+    """全タブ共通仕様(最大幅72px・ホイール無効)のDoubleSpinBoxを生成する。"""
     spin = NoScrollDoubleSpinBox(objectName=object_name)
     spin.setRange(minimum, maximum)
     spin.setDecimals(decimals)
@@ -38,7 +44,7 @@ def make_double_spin(
     spin.setValue(value)
     if suffix:
         spin.setSuffix(suffix)
-    spin.setMaximumWidth(80)
+    spin.setMaximumWidth(_SPIN_MAX_WIDTH)
     return spin
 
 
@@ -47,8 +53,26 @@ def make_iteration_spin(object_name: str) -> QtWidgets.QSpinBox:
     spin = NoScrollSpinBox(objectName=object_name)
     spin.setRange(1, 1000)
     spin.setValue(3)
-    spin.setMaximumWidth(80)
+    spin.setMaximumWidth(_SPIN_MAX_WIDTH)
     return spin
+
+
+def _apply_form_wrap_policy(settings_groups: List[QtWidgets.QWidget]) -> None:
+    """設定グループ内の全QFormLayoutに「長い行は折り返す」方針を適用する。
+
+    設定カラムの必要横幅は、これまで「最も長いラベル + 最も広い入力欄」の
+    合計(QFormLayoutの既定=DontWrapRows)で決まっていた。そのため、
+    「遅延時間[s]/コンプライアンス電流[A]:」のような長いラベルを持つタブが
+    カラム全体の幅を押し広げ、他タブでは余白として無駄になっていた。
+
+    ``WrapLongRows`` にすると、幅が足りない行だけラベルを入力欄の上へ
+    折り返すため、必要横幅が「max(ラベル, 入力欄)」まで下がる。幅に余裕が
+    ある行はこれまで通り横並びのまま描画されるので、見た目はほぼ変わらない。
+    """
+    wrap_long_rows = enum_value(QtWidgets.QFormLayout, "WrapLongRows")
+    for group in settings_groups:
+        for form_layout in group.findChildren(QtWidgets.QFormLayout):
+            form_layout.setRowWrapPolicy(wrap_long_rows)
 
 
 def build_settings_column(
@@ -68,6 +92,8 @@ def build_settings_column(
     Returns:
         構築したQScrollArea。
     """
+    _apply_form_wrap_policy(settings_groups)
+
     root_layout = QtWidgets.QVBoxLayout(container)
     root_layout.setObjectName(f"{prefix}_rootLayout")
     root_layout.setContentsMargins(4, 4, 4, 4)
@@ -77,6 +103,11 @@ def build_settings_column(
     # 設定カラム幅は固定レンジで運用するため、横スクロールは常に無効化する
     # (前回修正で下部にうっすら現れていた不要な横スクロールバーの解消)。
     scroll_area.setHorizontalScrollBarPolicy(enum_value(Qt, "ScrollBarAlwaysOff"))
+    # 縦スクロールバーは常時表示にする。タブによって設定項目の数が違うため、
+    # 「必要なときだけ表示」だとスクロールバーの有無で設定欄の実効幅が
+    # タブ切り替えのたびに約28px変動していた(OPV/JVLでは非表示、2ch活用モードでは
+    # 表示)。常に同じ幅を確保することで、どのタブでも設定欄の横幅を揃える。
+    scroll_area.setVerticalScrollBarPolicy(enum_value(Qt, "ScrollBarAlwaysOn"))
     scroll_area.setFrameShape(enum_value(QtWidgets.QFrame, "NoFrame"))
 
     settings_container = QtWidgets.QWidget(objectName=f"{prefix}_settingsContainer")

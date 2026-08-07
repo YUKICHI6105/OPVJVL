@@ -321,16 +321,13 @@ class DualAxisPlotBuffer:
             self.luminance_curve.setData(self.x_luminance, self.y_luminance)
 
 
-def install_auto_range_menu(plot_widget: pg.PlotWidget) -> None:
-    """ViewBoxの右クリックメニュー先頭に「両軸を自動スケーリング」を追加する。
+def _install_auto_range_action(plot_widget: pg.PlotWidget, view_box: pg.ViewBox) -> None:
+    """指定ViewBoxの右クリックメニュー先頭へ「両軸を自動スケーリング」を追加する。
 
-    EQEプロジェクト(``EQE/src/views/plot_controller.py``)のパターンを踏襲し、
-    トリガで ``plot_item.enableAutoRange()`` を実行する(x/y両軸を自動スケーリング状態に
-    戻す)。輝度用ViewBox(``luminance_viewbox``)を持つプロットでは、そちらにも
-    auto rangeを適用する。多重インストールを避けるため、既に追加済みなら何もしない。
+    トリガ時の動作はViewBoxによらず共通(メインのPlotItemと、存在すれば
+    輝度用ViewBoxの両方をauto range状態へ戻す)。多重インストールを避けるため、
+    既に追加済みなら何もしない。
     """
-    plot_item = plot_widget.getPlotItem()
-    view_box = plot_item.getViewBox()
     menu = getattr(view_box, "menu", None)
     if menu is None:
         return
@@ -338,7 +335,7 @@ def install_auto_range_menu(plot_widget: pg.PlotWidget) -> None:
         return
 
     def _auto_range_both() -> None:
-        plot_item.enableAutoRange()
+        plot_widget.getPlotItem().enableAutoRange()
         luminance_viewbox = getattr(plot_widget, "luminance_viewbox", None)
         if luminance_viewbox is not None:
             luminance_viewbox.enableAutoRange(x=True, y=True)
@@ -355,6 +352,28 @@ def install_auto_range_menu(plot_widget: pg.PlotWidget) -> None:
 
     # 参照保持(GC防止)と多重インストール防止フラグを兼ねる。
     view_box._auto_range_both_action = auto_both_action
+
+
+def install_auto_range_menu(plot_widget: pg.PlotWidget) -> None:
+    """ViewBoxの右クリックメニュー先頭に「両軸を自動スケーリング」を追加する。
+
+    EQEプロジェクト(``EQE/src/views/plot_controller.py``)のパターンを踏襲し、
+    トリガで ``plot_item.enableAutoRange()`` を実行する(x/y両軸を自動スケーリング状態に
+    戻す)。輝度用ViewBox(``luminance_viewbox``)を持つプロットでは、そちらにも
+    auto rangeを適用する。
+
+    輝度用ViewBoxはメインViewBoxの上に重ねてシーンへ追加されるため、プロット領域の
+    右クリックは(メインではなく)輝度用ViewBox自身のメニューを開く。そのため
+    メインViewBoxだけでなく輝度用ViewBoxのメニューにも同じ項目を追加しないと、
+    輝度計を使う測定(JVLのI-V-Lページ、2ch活用モードの発光素子計測)で
+    「両軸を自動スケーリング」が出てこなくなる。輝度用ViewBoxは測定開始時に
+    ``setup_luminance_axis()`` で後から生成されることもあるため、そちら側からも
+    本関数と同じ経路で項目を追加する。
+    """
+    _install_auto_range_action(plot_widget, plot_widget.getPlotItem().getViewBox())
+    luminance_viewbox = getattr(plot_widget, "luminance_viewbox", None)
+    if luminance_viewbox is not None:
+        _install_auto_range_action(plot_widget, luminance_viewbox)
 
 
 def setup_luminance_axis(plot_widget: pg.PlotWidget) -> None:
@@ -393,6 +412,13 @@ def setup_luminance_axis(plot_widget: pg.PlotWidget) -> None:
 
     _sync_luminance_viewbox()
     main_viewbox.sigResized.connect(_sync_luminance_viewbox)
+
+    # 輝度用ViewBoxはメインViewBoxの上に重なり、プロット領域の右クリックを
+    # 横取りする。メインViewBox側に「両軸を自動スケーリング」が入っている
+    # プロットでは、こちらのメニューにも同じ項目を追加して、輝度計を使う測定でも
+    # 右クリックメニューの内容が変わらないようにする。
+    if getattr(main_viewbox, "_auto_range_both_action", None) is not None:
+        _install_auto_range_action(plot_widget, luminance_viewbox)
 
     cleanup_state = {"done": False}
 

@@ -11,6 +11,7 @@ from views import plot_buffer, theme
 from views.plot_buffer import (
     DualAxisPlotBuffer,
     PlotBuffer,
+    install_auto_range_menu,
     set_iv_axis_labels,
     setup_luminance_axis,
 )
@@ -216,3 +217,54 @@ def test_dual_axis_plot_buffer_reverse_from_index_splits_current_only(plot_widge
     assert legend is not None
     labels = {item[1].text for item in legend.items}
     assert labels == {"Current (Forward)", "Current (Reverse)", "Luminance"}
+
+
+# ----------------------------------------------------------------------
+# 右クリックメニュー「両軸を自動スケーリング」
+# ----------------------------------------------------------------------
+_AUTO_RANGE_TEXT = "両軸を自動スケーリング (Auto Range Both)"
+
+
+def _has_auto_range_action(view_box) -> bool:
+    menu = getattr(view_box, "menu", None)
+    if menu is None:
+        return False
+    return any(action.text() == _AUTO_RANGE_TEXT for action in menu.actions())
+
+
+def test_install_auto_range_menu_adds_action_to_main_viewbox(plot_widget):
+    """メインViewBoxの右クリックメニュー先頭に自動スケーリング項目が入る。"""
+    install_auto_range_menu(plot_widget)
+
+    assert _has_auto_range_action(plot_widget.getPlotItem().getViewBox())
+
+
+def test_install_auto_range_menu_is_idempotent(plot_widget):
+    """複数回呼んでも項目は重複しない。"""
+    install_auto_range_menu(plot_widget)
+    install_auto_range_menu(plot_widget)
+
+    menu = plot_widget.getPlotItem().getViewBox().menu
+    assert [a.text() for a in menu.actions()].count(_AUTO_RANGE_TEXT) == 1
+
+
+def test_luminance_viewbox_created_later_also_gets_auto_range_action(plot_widget):
+    """測定開始時に後から輝度軸を足しても自動スケーリング項目が失われない。
+
+    輝度用ViewBoxはメインViewBoxの上に重なり、プロット領域の右クリックを
+    横取りするため、そちら側のメニューにも同じ項目が必要になる
+    (2ch活用モードの発光素子計測で項目が消えていた不具合の回帰テスト)。
+    """
+    install_auto_range_menu(plot_widget)
+    setup_luminance_axis(plot_widget)
+
+    assert _has_auto_range_action(plot_widget.luminance_viewbox)
+
+
+def test_install_auto_range_menu_covers_existing_luminance_viewbox(plot_widget):
+    """輝度軸を先に用意してから呼んだ場合も、両方のViewBoxへ項目が入る。"""
+    setup_luminance_axis(plot_widget)
+    install_auto_range_menu(plot_widget)
+
+    assert _has_auto_range_action(plot_widget.getPlotItem().getViewBox())
+    assert _has_auto_range_action(plot_widget.luminance_viewbox)

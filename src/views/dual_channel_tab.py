@@ -140,6 +140,11 @@ class DualChannelTab(QtWidgets.QWidget):
     def _build_ui(self) -> None:
         dual_rootLayout = QtWidgets.QVBoxLayout(self)
         dual_rootLayout.setObjectName("dual_rootLayout")
+        # 2ch活用モードだけは「タブ直下のルート → モードページ」と入れ子が1段深く、
+        # 既定余白(9px)がモードページ側の余白(4px)へ上乗せされるため、設定欄の
+        # 実効幅がOPV/JVLタブより18px狭くなっていた。ここでは余白を持たせず、
+        # 幅の基準をモードページ側(build_settings_column)へ一本化する。
+        dual_rootLayout.setContentsMargins(0, 0, 0, 0)
 
         dual_modeSelectRow = QtWidgets.QHBoxLayout()
         dual_modeSelectRow.setObjectName("dual_modeSelectRow")
