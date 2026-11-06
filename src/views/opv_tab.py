@@ -42,6 +42,8 @@ class OPVTab(QtWidgets.QWidget):
         self._channel = "smua"
         self._use_mock = False
         self._last_result = None  # (points, include_luminance) 最後に完了/中断した測定結果
+        self._active_forward_point_count = None
+        self._last_forward_point_count = None
         self._contact_check_running = False
         self._build_ui()
 
@@ -193,6 +195,7 @@ class OPVTab(QtWidgets.QWidget):
         self.opv_progressBar.setMaximum(max(total_points, 1))
         self.opv_progressBar.setValue(0)
         reverse_from_index = config.forward_point_count() if config.hysteresis else None
+        self._active_forward_point_count = reverse_from_index
         self._plot_buffer = PlotBuffer(self.opv_plotWidget, reverse_from_index=reverse_from_index)
         self.viewModel.start_measurement(config)
 
@@ -255,6 +258,7 @@ class OPVTab(QtWidgets.QWidget):
         QtWidgets.QMessageBox.warning(self, "入力エラー", message)
 
     def _on_finished_ok(self, points: list, csv_path: str, aborted: bool) -> None:
+        self._last_forward_point_count = self._active_forward_point_count
         self._last_result = (points, False)
         set_measurement_completed(self.opv_progressBar, not aborted)
         play_completion_sound("aborted" if aborted else "success", self)
@@ -278,7 +282,7 @@ class OPVTab(QtWidgets.QWidget):
         )
         if not path:
             return
-        save_points_csv(points, path, include_luminance)
+        save_points_csv(points, path, include_luminance, self._last_forward_point_count)
         self._append_log(f"測定データを保存しました: {path}")
 
     # ------------------------------------------------------------------

@@ -182,7 +182,7 @@ def test_plot_buffer_reverse_from_index_splits_into_two_curves(plot_widget):
     assert legend is not None
     assert len(legend.items) == 2
     labels = {item[1].text for item in legend.items}
-    assert labels == {"Current (Forward)", "Current (Reverse)"}
+    assert labels == {"Current / Forward（往路）", "Current / Backward（復路）"}
 
 
 def test_plot_buffer_reverse_from_index_without_curve_name_uses_default_labels(plot_widget):
@@ -195,10 +195,10 @@ def test_plot_buffer_reverse_from_index_without_curve_name_uses_default_labels(p
     legend = widget.getPlotItem().legend
     assert legend is not None
     labels = {item[1].text for item in legend.items}
-    assert labels == {"Forward", "Reverse"}
+    assert labels == {"Current / Forward（往路）", "Current / Backward（復路）"}
 
 
-def test_dual_axis_plot_buffer_reverse_from_index_splits_current_only(plot_widget):
+def test_dual_axis_plot_buffer_reverse_from_index_splits_current_and_luminance(plot_widget):
     """電流カーブのみ往路/復路で分割され、輝度カーブは単一のまま。"""
     widget = plot_widget
     setup_luminance_axis(widget)
@@ -210,13 +210,29 @@ def test_dual_axis_plot_buffer_reverse_from_index_splits_current_only(plot_widge
 
     assert len(buf.x) == 2
     assert len(buf.reverse_x) == 2
-    assert len(buf.x_luminance) == 4
-    assert _luminance_curve_count(widget) == 1
+    assert len(buf.x_luminance) == 2
+    assert len(buf.reverse_x_luminance) == 2
+    assert _luminance_curve_count(widget) == 2
 
     legend = widget.getPlotItem().legend
     assert legend is not None
     labels = {item[1].text for item in legend.items}
-    assert labels == {"Current (Forward)", "Current (Reverse)", "Luminance"}
+    assert labels == {"Current / Forward（往路）", "Current / Backward（復路）", "Luminance / Forward（往路）", "Luminance / Backward（復路）"}
+
+
+def test_missing_luminance_does_not_shift_backward_boundary(plot_widget):
+    setup_luminance_axis(plot_widget)
+    buf = DualAxisPlotBuffer(plot_widget, reverse_from_index=3)
+    buf.add_point(0, 0, 10)
+    buf.add_point(1, 1, None)
+    buf.add_point(2, 2, 30)
+    buf.add_point(1, 3, 40)
+    assert buf.x_luminance == [0, 2]
+    assert buf.reverse_x_luminance == [1]
+    assert buf.reverse_y_luminance == [40]
+    from qtcompat import Qt, enum_value
+    assert buf.reverse_current_curve.opts["pen"].style() == enum_value(Qt, "DashLine")
+    assert buf.reverse_luminance_curve.opts["pen"].style() == enum_value(Qt, "DashLine")
 
 
 # ----------------------------------------------------------------------

@@ -91,6 +91,7 @@ class JVLViewModel(QObject):
         )
         csv_save_fn = functools.partial(
             csv_writer.save_jvl_csv,
+            forward_point_count=config.forward_point_count() if config.hysteresis else None,
             sample_name=config.sample_name,
             save_dir=config.save_dir,
             use_luminance=config.use_luminance,

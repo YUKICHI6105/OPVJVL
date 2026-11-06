@@ -13,11 +13,11 @@ def test_filename_helpers():
     assert csv_writer.jvl_csv_filename("sample") == "sample_JVL_measurement_data.csv"
     assert (
         csv_writer.dual_a_csv_filename("s", "太陽電池")
-        == "s_dualA_OPV_measurement_data.csv"
+        == "s_OPV_measurement_data.csv"
     )
     assert (
         csv_writer.dual_b_csv_filename("s", "A", "発光素子")
-        == "s_dualB_chA_JVL_measurement_data.csv"
+        == "s_JVL_measurement_data.csv"
     )
     assert csv_writer.dual_b_meta_json_filename("s") == "s_dualB_meta.json"
 

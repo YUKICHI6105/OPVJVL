@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Iterable, List, Optional
 import pyqtgraph as pg
 
-from qtcompat import QAction, QtGui
+from qtcompat import QAction, Qt, QtGui, enum_value
 from views import theme
 
 # review.md指摘#1: JVグラフを「散布図のみ」から「折れ線+シンボル」表示にするための
@@ -164,8 +164,7 @@ class PlotBuffer:
     review.md項目2: ``reverse_from_index`` を指定すると、``add_point`` で
     受け取った通算点数(0始まり)がこの値以上になった点から、既定色(往路)とは
     別カーブ(復路、``_REVERSE_LINE_COLOR``)へ切り替える。凡例ラベルは
-    ``curve_name`` 指定時は「{curve_name} (Forward)」/「{curve_name} (Reverse)」、
-    未指定でも「Forward」/「Reverse」として凡例へ登録する。未指定
+    「Forward（往路）」/「Backward（復路）」として凡例へ登録する。未指定
     (``None``、既定)の場合は完全に従来通り1カーブのみ。
     """
 
@@ -191,8 +190,8 @@ class PlotBuffer:
         forward_kwargs = {}
         reverse_kwargs = {}
         if reverse_from_index is not None:
-            forward_kwargs["name"] = f"{curve_name} (Forward)" if curve_name else "Forward"
-            reverse_kwargs["name"] = f"{curve_name} (Reverse)" if curve_name else "Reverse"
+            forward_kwargs["name"] = f"{curve_name or 'Current'} / Forward（往路）"
+            reverse_kwargs["name"] = f"{curve_name or 'Current'} / Backward（復路）"
         elif curve_name is not None:
             forward_kwargs["name"] = curve_name
 
@@ -204,9 +203,9 @@ class PlotBuffer:
         )
         self.reverse_curve = None
         if reverse_from_index is not None:
-            reverse_pen = pg.mkPen(_REVERSE_LINE_COLOR, width=float(_GRAPH_STYLE["graph_line_width"]))
+            reverse_pen = pg.mkPen(_REVERSE_LINE_COLOR, width=float(_GRAPH_STYLE["graph_line_width"]), style=enum_value(Qt, "DashLine"))
             self.reverse_curve = plot_widget.plot(
-                [], [], pen=reverse_pen, symbol="o", symbolSize=symbol_size, **reverse_kwargs
+                [], [], pen=reverse_pen, symbol="t", symbolSize=symbol_size, **reverse_kwargs
             )
         # review.md指摘#2: 新規測定開始時は、前回のズーム状態に関わらず
         # xy両軸ともauto rangeへ戻す(輝度用ViewBoxがあれば同様)。
@@ -235,10 +234,8 @@ class DualAxisPlotBuffer:
     addItemしており ``plot_widget.plot(name=...)`` を通らないため、
     LegendItemへは手動で ``addItem()`` する。
 
-    review.md項目2: ``reverse_from_index`` を指定すると、電流カーブのみ
-    ``PlotBuffer`` と同様に往路/復路で分割する。輝度カーブは分割せず、
-    常に単一の``_LUMINANCE_LINE_COLOR``カーブ(凡例は「Luminance」1つ)のまま
-    往路・復路を通して描画する。
+    ``reverse_from_index`` を指定すると、電流・輝度ともに往路/復路で分割し、
+    復路を破線で表示する。点数は電流の取得数で判定し、輝度の欠測に影響されない。
     """
 
     def __init__(
@@ -257,6 +254,8 @@ class DualAxisPlotBuffer:
         self.reverse_y_current: List[float] = []
         self.x_luminance: List[float] = []
         self.y_luminance: List[float] = []
+        self.reverse_x_luminance: List[float] = []
+        self.reverse_y_luminance: List[float] = []
         self._reverse_from_index = reverse_from_index
         line_width = float(_GRAPH_STYLE["graph_line_width"])
         symbol_size = int(_GRAPH_STYLE["graph_symbol_size"])
@@ -269,8 +268,8 @@ class DualAxisPlotBuffer:
         current_kwargs = {}
         reverse_kwargs = {}
         if reverse_from_index is not None:
-            current_kwargs["name"] = f"{current_name} (Forward)" if current_name else "Forward"
-            reverse_kwargs["name"] = f"{current_name} (Reverse)" if current_name else "Reverse"
+            current_kwargs["name"] = f"{current_name or 'Current'} / Forward（往路）"
+            reverse_kwargs["name"] = f"{current_name or 'Current'} / Backward（復路）"
         elif current_name is not None:
             current_kwargs["name"] = current_name
 
@@ -287,8 +286,8 @@ class DualAxisPlotBuffer:
             self.reverse_current_curve = plot_widget.plot(
                 [],
                 [],
-                pen=pg.mkPen(_REVERSE_LINE_COLOR, width=line_width),
-                symbol="o",
+                pen=pg.mkPen(_REVERSE_LINE_COLOR, width=line_width, style=enum_value(Qt, "DashLine")),
+                symbol="t",
                 symbolSize=symbol_size,
                 **reverse_kwargs,
             )
@@ -298,7 +297,15 @@ class DualAxisPlotBuffer:
         luminance_viewbox = getattr(plot_widget, "luminance_viewbox", None)
         if luminance_viewbox is not None:
             luminance_viewbox.addItem(self.luminance_curve)
-        if legend is not None and luminance_name is not None:
+        self.reverse_luminance_curve = None
+        if reverse_from_index is not None and luminance_viewbox is not None:
+            self.reverse_luminance_curve = pg.PlotDataItem(
+                [], [], pen=pg.mkPen("#9467bd", width=line_width, style=enum_value(Qt, "DashLine")),
+            )
+            luminance_viewbox.addItem(self.reverse_luminance_curve)
+            legend.addItem(self.luminance_curve, f"{luminance_name or 'Luminance'} / Forward（往路）")
+            legend.addItem(self.reverse_luminance_curve, f"{luminance_name or 'Luminance'} / Backward（復路）")
+        elif legend is not None and luminance_name is not None:
             legend.addItem(self.luminance_curve, luminance_name)
         # review.md指摘#2: 新規測定開始時はxy両軸ともauto rangeへ戻す。
         plot_widget.getPlotItem().enableAutoRange()
@@ -316,9 +323,14 @@ class DualAxisPlotBuffer:
             self.y_current.append(current)
             self.current_curve.setData(self.x, self.y_current)
         if luminance is not None:
-            self.x_luminance.append(x)
-            self.y_luminance.append(luminance)
-            self.luminance_curve.setData(self.x_luminance, self.y_luminance)
+            if self.reverse_luminance_curve is not None and total_so_far >= self._reverse_from_index:
+                self.reverse_x_luminance.append(x)
+                self.reverse_y_luminance.append(luminance)
+                self.reverse_luminance_curve.setData(self.reverse_x_luminance, self.reverse_y_luminance)
+            else:
+                self.x_luminance.append(x)
+                self.y_luminance.append(luminance)
+                self.luminance_curve.setData(self.x_luminance, self.y_luminance)
 
 
 def _install_auto_range_action(plot_widget: pg.PlotWidget, view_box: pg.ViewBox) -> None:

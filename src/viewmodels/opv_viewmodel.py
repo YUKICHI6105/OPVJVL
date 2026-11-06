@@ -77,6 +77,7 @@ class OPVViewModel(QObject):
         make_iterator = functools.partial(run_opv_sequence, smu, config)
         csv_save_fn = functools.partial(
             csv_writer.save_opv_csv,
+            forward_point_count=config.forward_point_count() if config.hysteresis else None,
             sample_name=config.sample_name,
             save_dir=config.save_dir,
         )
