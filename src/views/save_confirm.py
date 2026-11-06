@@ -15,7 +15,7 @@ from qtcompat import QtWidgets, enum_value
 
 
 def ensure_save_dir(parent, save_dir_edit: QtWidgets.QLineEdit) -> bool:
-    """保存先が空欄なら選択を促す(review.md項目3)。
+    """保存先を検証し、空欄の場合だけ利用者に選択を促す。
 
     ``save_dir_edit`` のテキスト(前後空白除去後)が空の場合、
     ``QFileDialog.getExistingDirectory`` でディレクトリ選択ダイアログを開く。
@@ -23,7 +23,8 @@ def ensure_save_dir(parent, save_dir_edit: QtWidgets.QLineEdit) -> bool:
     キャンセルされた場合は「保存先を指定してください」の情報ダイアログを出して
     Falseを返す(測定を開始しない)。
 
-    空でなければダイアログを出さず即Trueを返す。
+    入力済みの保存先に書き込めなければ、設定を保持してFalseを返す。
+    保存先の変更は利用者による入力または参照操作で行う。
 
     Args:
         parent: ダイアログの親ウィジェット。
@@ -43,8 +44,10 @@ def ensure_save_dir(parent, save_dir_edit: QtWidgets.QLineEdit) -> bool:
         except OSError as exc:
             QtWidgets.QMessageBox.warning(
                 parent, "保存先を確認してください",
-                f"保存先に書き込めません。別のフォルダーを選択してください。\n\n{exc}",
+                f"保存先に書き込めないため測定を開始しません。\n"
+                f"保存先の設定は変更していません。「参照」から保存先を確認してください。\n\n{exc}",
             )
+            return False
 
     directory = QtWidgets.QFileDialog.getExistingDirectory(parent, "保存先ディレクトリを選択")
     if directory:

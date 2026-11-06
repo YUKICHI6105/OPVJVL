@@ -1,7 +1,37 @@
 """MainWindow経由の測定パラメータ保存・復元(GUIラウンドトリップ)のテスト。"""
 from __future__ import annotations
 
+import pytest
+
 from views.main_window import MainWindow
+
+
+@pytest.mark.parametrize("developer_mode", [False, True])
+def test_save_directories_survive_mode_switches_and_restart(
+    qtbot, monkeypatch, tmp_path, developer_mode,
+):
+    from utils import persistence
+
+    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    expected = {"shared_save_dir": str(tmp_path / "shared_missing"),
+                "dual_b_save_dir": str(tmp_path / "dual_missing")}
+    persistence.save_settings(expected)
+    window = MainWindow(developer_mode=developer_mode)
+    qtbot.addWidget(window)
+    for index in range(window.mainTabWidget.count()):
+        window.mainTabWidget.setCurrentIndex(index)
+        for mode in (1, 0):
+            window.dual_channel_tab.dual_modeSelectCombo.setCurrentIndex(mode)
+        collected = window._collect_measurement_settings()
+        assert {key: collected[key] for key in expected} == expected
+    window.close()
+    loaded = persistence.load_settings()
+    assert {key: loaded[key] for key in expected} == expected
+    reopened = MainWindow(developer_mode=developer_mode)
+    qtbot.addWidget(reopened)
+    assert reopened.sharedSaveDirEdit.text() == expected["shared_save_dir"]
+    assert reopened.dual_channel_tab.dual_b_saveDirEdit.text() == expected["dual_b_save_dir"]
+    reopened.close()
 
 
 def test_main_window_saves_on_close_and_restores_on_next_launch(qtbot, monkeypatch, tmp_path):

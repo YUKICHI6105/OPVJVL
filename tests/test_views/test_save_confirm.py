@@ -81,16 +81,18 @@ def test_ensure_save_dir_returns_true_when_already_filled(tmp_path, qtbot):
     assert edit.text() == str(tmp_path)
 
 
-def test_ensure_save_dir_replaces_unwritable_path(tmp_path, qtbot, monkeypatch):
-    """古い保存先へ書けない場合は測定前に別フォルダーを選ばせる。"""
+def test_ensure_save_dir_preserves_unwritable_path(tmp_path, qtbot, monkeypatch):
+    """書けない保存先も自動で変更せず、測定を開始させない。"""
     edit = QtWidgets.QLineEdit(str(tmp_path / "old_user" / "missing"))
     qtbot.addWidget(edit)
     warnings = []
     monkeypatch.setattr(QtWidgets.QMessageBox, "warning", lambda *args: warnings.append(args))
-    monkeypatch.setattr(QtWidgets.QFileDialog, "getExistingDirectory", lambda *args: str(tmp_path))
+    def unexpected_selection(*args):
+        raise AssertionError("入力済みの保存先を変更するダイアログは開かない")
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getExistingDirectory", unexpected_selection)
 
-    assert ensure_save_dir(None, edit) is True
-    assert edit.text() == str(tmp_path)
+    assert ensure_save_dir(None, edit) is False
+    assert edit.text() == str(tmp_path / "old_user" / "missing")
     assert len(warnings) == 1
 
 
