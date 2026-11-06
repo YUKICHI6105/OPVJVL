@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Callable, List, Optional
+from typing import Callable, Optional
 
 from models.instruments.base import AbstractLuminanceMeter, AbstractSourceMeter
 from models.measurement.config import ChannelConfig
@@ -39,6 +39,8 @@ class DualChannelWorker(QThread):
     error = pyqtSignal(str)
     contact_check_reading = pyqtSignal(str, float, float)
     contact_check_finished = pyqtSignal()
+    channel_stopped = pyqtSignal(str)
+    channel_save_error = pyqtSignal(str)
 
     def __init__(
         self,
@@ -64,9 +66,38 @@ class DualChannelWorker(QThread):
         self._contact_request = None
         self._contact_state = None
         self._contact_stop_requested = False
+        self._restartable_channels: set[str] = set()
+        self._channel_points = {"A": [], "B": []}
+        self._points = []
+        self._channel_totals = {"A": 0, "B": 0}
+        self.channel_save_fn = None
 
-    def reserve_measurement_channels(self, channels: set[str]) -> None:
+    @property
+    def total_points(self) -> int:
+        return self._total_points
+
+    def can_restart_channel(self, channel: str) -> bool:
+        with self._pending_lock:
+            return channel in self._restartable_channels
+
+    def acknowledge_channel_stop(self, channel: str) -> None:
+        """出力OFF後に途中データを保存し、保存成功時だけ再測定を許可する。"""
+        if self.channel_save_fn is None:
+            return
+        try:
+            self.channel_save_fn(channel, list(self._channel_points[channel]))
+        except Exception as exc:
+            self.channel_save_error.emit(f"チャンネル{channel}の中断データを保存できません: {exc}")
+            return
+        with self._pending_lock:
+            self._restartable_channels.add(channel)
+            self._measurement_channels.discard(channel)
+        self.channel_stopped.emit(channel)
+
+    def reserve_measurement_channels(self, channels: set[str], point_totals=None) -> None:
         self._measurement_channels.update(channels)
+        if point_totals is not None:
+            self._channel_totals.update(point_totals)
 
     def request_contact_check(self, channel, device_mode, compliance, nplc, threshold, v_max) -> bool:
         with self._pending_lock:
@@ -136,13 +167,16 @@ class DualChannelWorker(QThread):
     ) -> bool:
         """空きチャンネルの開始要求を測定スレッドへ安全に渡す。"""
         with self._pending_lock:
-            if (self._abort_requested or channel in self._aborted_channels
+            if (self._abort_requested
+                    or (channel in self._aborted_channels and channel not in self._restartable_channels)
                     or not self._accepting_channels or self._pending_channel is not None
                     or (self._contact_request is not None and self._contact_request[0] == channel)):
                 return False
             self._measurement_channels.add(channel)
             self._pending_channel = (channel, config, luminance_meter)
-            self._total_points += len(config.build_voltage_list())
+            count = len(config.build_voltage_list())
+            self._total_points += count - self._channel_totals[channel]
+            self._channel_totals[channel] = count
             return True
 
     def take_pending_channel(self) -> Optional[tuple[str, ChannelConfig]]:
@@ -159,6 +193,13 @@ class DualChannelWorker(QThread):
                 meter.close()
                 raise
             self._luminance_meter = meter
+        with self._pending_lock:
+            restarting = channel in self._restartable_channels
+            self._restartable_channels.discard(channel)
+            self._aborted_channels.discard(channel)
+        if restarting:
+            self._points[:] = [point for point in self._points if point.channel != channel]
+            self._channel_points[channel].clear()
         return channel, config
 
     def get_luminance_meter(self) -> Optional[AbstractLuminanceMeter]:
@@ -203,9 +244,9 @@ class DualChannelWorker(QThread):
         return self._abort_requested
 
     def run(self) -> None:
-        points: List[object] = []
-        points_a: List[object] = []
-        points_b: List[object] = []
+        points = self._points
+        points_a = self._channel_points["A"]
+        points_b = self._channel_points["B"]
         try:
             self._smu.connect()
             if self._luminance_meter is not None:

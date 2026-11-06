@@ -415,6 +415,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dual_channel_tab.viewModel.running_changed_b.connect(
             lambda running: self._on_any_running_changed("dual_b", running)
         )
+        self.dual_channel_tab.viewModel.channel_stopped_b.connect(
+            lambda _channel: self._update_start_button_locks()
+        )
         for signal in (self.opv_tab.viewModel.contact_check_running_changed,
                        self.jvl_tab.viewModel.contact_check_running_changed,
                        self.dual_channel_tab.viewModel.contact_check_running_changed_a,

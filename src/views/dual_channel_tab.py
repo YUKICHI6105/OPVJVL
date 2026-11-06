@@ -23,6 +23,7 @@ from views import tab_layout
 from views.luminance_confirm import confirm_luminance_use
 from views.notify_sound import dismiss_completion_alarm, play_completion_sound
 from views.plot_buffer import (
+    cleanup_luminance_axis,
     DualAxisPlotBuffer,
     PlotBuffer,
     install_auto_range_menu,
@@ -120,6 +121,7 @@ class DualChannelTab(QtWidgets.QWidget):
 
         # モードB
         self.viewModel.running_changed_b.connect(self._on_running_changed_b)
+        self.viewModel.channel_stopped_b.connect(self._on_channel_stopped_b)
         self.viewModel.progress_b.connect(self.dual_b_progressBar.setValue)
         self.viewModel.point_measured_b_cha.connect(self._on_point_measured_b_cha)
         self.viewModel.point_measured_b_chb.connect(self._on_point_measured_b_chb)
@@ -762,16 +764,17 @@ class DualChannelTab(QtWidgets.QWidget):
             if not self.viewModel.start_mode_b(config):
                 return
             self._mode_b_reserved_channels[channel] = True
+            self._mode_b_stopped_channels[channel] = False
             self._on_running_changed_b(True)
             selected_channel = chan_a if channel == "A" else chan_b
             self.dual_b_progressBar.setMaximum(
-                self.dual_b_progressBar.maximum()
-                + len(selected_channel.build_voltage_list())
+                max(self.viewModel.mode_b_total_points(), 1)
             )
             self._active_forward_point_count_b[channel] = (
                 selected_channel.forward_point_count() if selected_channel.hysteresis else None
             )
             selected_plot = self.dual_chA_plotWidget if channel == "A" else self.dual_chB_plotWidget
+            cleanup_luminance_axis(selected_plot)
             use_luminance = bool(bm9_port)
             reverse_index = self._active_forward_point_count_b[channel]
             if use_luminance:
@@ -926,6 +929,11 @@ class DualChannelTab(QtWidgets.QWidget):
     # ------------------------------------------------------------------
     # ViewModelからのシグナル受信ハンドラ (モードB)
     # ------------------------------------------------------------------
+    def _on_channel_stopped_b(self, channel: str) -> None:
+        self._mode_b_reserved_channels[channel] = False
+        self._mode_b_stopped_channels[channel] = False
+        self._on_running_changed_b(self.viewModel.mode_b_is_running())
+
     def _on_running_changed_b(self, running: bool) -> None:
         self.dual_b_startButton.setEnabled(not running)
         active = self._active_mode_b_config if running else None

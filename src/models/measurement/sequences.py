@@ -247,6 +247,7 @@ def run_dual_b_sequence(
     finish_if_no_pending: Optional[Callable[[], bool]] = None,
     is_channel_aborted: Optional[Callable[[str], bool]] = None,
     service_contact_check: Optional[Callable[[], None]] = None,
+    on_channel_stopped: Optional[Callable[[str], None]] = None,
 ) -> Iterator[ChannelPoint]:
     """モードB(2素子同時計測)のロックステップ制御シーケンス。B-4-4節。
 
@@ -259,7 +260,7 @@ def run_dual_b_sequence(
         yield from _run_dual_b_joinable_sequence(
             smu, config, is_aborted, sleep_fn, luminance_meter,
             take_pending_channel, get_luminance_meter,
-            finish_if_no_pending, is_channel_aborted, service_contact_check,
+            finish_if_no_pending, is_channel_aborted, service_contact_check, on_channel_stopped,
         )
         return
 
@@ -354,6 +355,7 @@ def _run_dual_b_joinable_sequence(
     finish_if_no_pending: Optional[Callable[[], bool]],
     is_channel_aborted: Optional[Callable[[str], bool]],
     service_contact_check: Optional[Callable[[], None]],
+    on_channel_stopped: Optional[Callable[[str], None]],
 ) -> Iterator[ChannelPoint]:
     """同じSMUを保持したまま、空きチャンネルを次の掃引点から追加する。"""
     channels = {"A": config.channel_a, "B": config.channel_b}
@@ -379,6 +381,8 @@ def _run_dual_b_joinable_sequence(
             stopped.add(key)
             positions[key] = len(voltages[key])
             smu.set_output(source_names[key], False)
+            if on_channel_stopped is not None:
+                on_channel_stopped(key)
 
     def stop_is_pending() -> bool:
         return bool(is_channel_aborted and any(
@@ -400,8 +404,9 @@ def _run_dual_b_joinable_sequence(
                 if is_aborted():
                     break
                 key, channel = pending
-                if channels[key].enabled:
+                if channels[key].enabled and key not in stopped:
                     raise ValueError(f"チャンネル{key}は既に測定中です。")
+                stopped.discard(key)
                 channels[key] = channel
                 if key == "A":
                     config.channel_a = channel

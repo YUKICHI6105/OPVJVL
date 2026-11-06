@@ -68,6 +68,56 @@ def test_idle_channel_contact_check_shares_measurement_connection(
     assert worker._smu.connect_calls == 1
 
 
+@pytest.mark.parametrize("restarted", ["A", "B"])
+@pytest.mark.parametrize("rename", [False, True])
+def test_stopped_channel_can_start_again_without_mixing_points(
+    restarted, rename, qtbot, tmp_path, monkeypatch, mode_b_tab,
+):
+    import json
+    tab = mode_b_tab
+    monkeypatch.setattr("views.dual_channel_tab.play_completion_sound", lambda *args: None)
+    overwritten = []
+    monkeypatch.setattr("views.dual_channel_tab.confirm_overwrite",
+                        lambda _parent, paths: overwritten.extend(paths) or True)
+    tab.apply_device_settings_mode_b("mock", "", True)
+    tab.dual_modeSelectCombo.setCurrentIndex(1)
+    tab.dual_b_saveDirEdit.setText(str(tmp_path))
+    for key in ("A", "B"):
+        getattr(tab, f"dual_ch{key}_sampleNameEdit").setText(f"old_{key}")
+        for field, value in (("vMinSpin", 0), ("vMaxSpin", 1.9), ("vStepSpin", 0.1),
+                             ("iterationSpin", 1), ("delaySpin", 0.1)):
+            getattr(tab, f"dual_ch{key}_{field}").setValue(value)
+    signal = (tab.viewModel.point_measured_b_cha if restarted == "A"
+              else tab.viewModel.point_measured_b_chb)
+    with qtbot.waitSignal(signal, timeout=10000):
+        tab.dual_b_startButton.click()
+    worker = tab.viewModel._worker_b
+    button = getattr(tab, f"dual_ch{restarted}_startButton")
+    with qtbot.waitSignal(tab.viewModel.channel_stopped_b, timeout=5000):
+        button.click()
+    assert button.isEnabled()
+    assert button.text() == "このチャネルを測定開始"
+    partial = tmp_path / f"old_{restarted}_OPV_measurement_data.csv"
+    with partial.open(encoding="utf-8", newline="") as f:
+        assert 0 < len(list(csv.DictReader(f))) < 20
+    assert json.loads((tmp_path / f"old_{restarted}_dualB_meta.json").read_text(encoding="utf-8"))["aborted"]
+    sample = f"new_{restarted}" if rename else f"old_{restarted}"
+    getattr(tab, f"dual_ch{restarted}_sampleNameEdit").setText(sample)
+    getattr(tab, f"dual_ch{restarted}_vMaxSpin").setValue(0.2)
+    with qtbot.waitSignal(tab.viewModel.finished_ok_b, timeout=10000) as result:
+        button.click()
+    points = [p for p in result.args[0] if p.channel == restarted]
+    assert [p.index for p in points] == [0, 1, 2]
+    assert [p.voltage for p in points] == [0, 0.1, 0.2]
+    assert len(result.args[0]) == 23
+    assert result.args[3] is False
+    assert worker._smu.reset_calls == 1
+    assert worker._smu.connect_calls == 1
+    with (tmp_path / f"{sample}_OPV_measurement_data.csv").open(encoding="utf-8", newline="") as f:
+        assert len(list(csv.DictReader(f))) == 3
+    assert str(tmp_path / f"{sample}_OPV_measurement_data.csv") in overwritten
+
+
 def directions(path):
     with open(path, encoding="utf-8", newline="") as stream:
         return [row["sweep direction"] for row in csv.DictReader(stream)]

@@ -46,6 +46,7 @@ class DualChannelViewModel(QObject):
     error_appended_b = pyqtSignal(str)
     error_b = pyqtSignal(str)
     finished_ok_b = pyqtSignal(list, str, str, bool)  # points, csv_path_a, csv_path_b, aborted
+    channel_stopped_b = pyqtSignal(str)
 
     # 接触確認 モードA用(smua固定。device_modeでhold/ramp自動切替)
     contact_check_running_changed_a = pyqtSignal(bool)
@@ -190,6 +191,9 @@ class DualChannelViewModel(QObject):
     def mode_b_is_running(self) -> bool:
         return self._mode_b_active
 
+    def mode_b_total_points(self) -> int:
+        return self._worker_b.total_points if self._worker_b is not None else 0
+
     def start_mode_b(self, config: DualBConfig) -> bool:
         if self._mode_b_active:
             return self._join_mode_b_channel(config)
@@ -272,10 +276,11 @@ class DualChannelViewModel(QObject):
             return run_dual_b_sequence(
                 smu, config, is_aborted, luminance_meter=luminance_meter,
                 take_pending_channel=worker.take_pending_channel,
-                get_luminance_meter=worker.get_luminance_meter,
+                get_luminance_meter=lambda: worker.get_luminance_meter() if config.bm9_port else None,
                 finish_if_no_pending=worker.finish_if_no_pending,
                 is_channel_aborted=worker.is_channel_aborted,
                 service_contact_check=worker.service_contact_check,
+                on_channel_stopped=worker.acknowledge_channel_stop,
             )
 
         def csv_save_fn(points_a, points_b, aborted):
@@ -301,7 +306,24 @@ class DualChannelViewModel(QObject):
         )
         worker.point_measured_a.connect(self._on_mode_b_point_measured_a)
         worker.reserve_measurement_channels({key for key, chan in (("A", chan_a), ("B", chan_b))
-                                             if chan.enabled})
+                                             if chan.enabled}, {"A": va_len, "B": vb_len})
+        def save_channel_checkpoint(channel, points):
+            selected = config.channel_a if channel == "A" else config.channel_b
+            path = csv_writer.save_dual_b_channel_csv(
+                points, selected.sample_name, config.save_dir, channel, selected.device_mode,
+                selected.device_mode == "発光素子" and bool(config.bm9_port),
+                selected.forward_point_count() if selected.hysteresis else None,
+            )
+            csv_writer.save_dual_b_meta_json(selected.sample_name, config.save_dir, {
+                "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+                "connection": config.connection, "aborted": True, "channel": channel,
+                "conditions": self._channel_meta(selected), "csv_path": path,
+            })
+            self.log_appended_b.emit(f"チャンネル{channel}の中断データを保存しました: {path}")
+        worker.channel_save_fn = save_channel_checkpoint
+        worker.channel_stopped.connect(self.channel_stopped_b.emit)
+        worker.channel_save_error.connect(self.error_appended_b.emit)
+        worker.channel_save_error.connect(self.error_b.emit)
         worker.contact_check_reading.connect(self.contact_check_reading_b.emit)
         worker.contact_check_finished.connect(self._on_shared_contact_check_finished)
         worker.point_measured_b.connect(self._on_mode_b_point_measured_b)
@@ -326,7 +348,8 @@ class DualChannelViewModel(QObject):
         new_channel = requested.channel_a if new_key == "A" else requested.channel_b
         current_channel = active.channel_a if new_key == "A" else active.channel_b
         other_channel = active.channel_b if new_key == "A" else active.channel_a
-        if (requested.channel_a.enabled == requested.channel_b.enabled or current_channel.enabled
+        if (requested.channel_a.enabled == requested.channel_b.enabled
+                or (current_channel.enabled and not worker.can_restart_channel(new_key))
                 or requested.connection != active.connection or requested.save_dir != active.save_dir):
             self.error_b.emit("測定中に追加できるのは、同じ接続・保存先の未測定チャンネルだけです。")
             return False
@@ -349,7 +372,7 @@ class DualChannelViewModel(QObject):
         if not worker.request_add_channel(new_key, new_channel, meter):
             self.error_b.emit("測定終了直前のためチャンネルを追加できませんでした。")
             return False
-        if requested.bm9_port:
+        if new_channel.device_mode == "発光素子":
             active.bm9_port = requested.bm9_port
         self.log_appended_b.emit(f"チャンネル{new_key}の測定を途中から開始します。")
         return True
