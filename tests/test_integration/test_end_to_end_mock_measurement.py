@@ -50,7 +50,7 @@ def test_e2e_opv_measurement(qtbot, tmp_path):
     assert not tab.opv_stopButton.isEnabled()
 
 
-def test_e2e_jvl_measurement(qtbot, tmp_path):
+def test_e2e_jvl_measurement(qtbot, tmp_path, monkeypatch):
     """JVLモードでのモックE2E測定を検証。"""
     window = MainWindow()
     qtbot.addWidget(window)
@@ -59,7 +59,7 @@ def test_e2e_jvl_measurement(qtbot, tmp_path):
     tab = window.jvl_tab
 
     tab.apply_device_settings("keithley2400", "COM5", "COM4", "smua", True)
-    tab.jvl_useLuminanceCheckBox.setChecked(True)
+    monkeypatch.setattr("views.jvl_tab.confirm_luminance_use", lambda *args: True)
     tab.jvl_vMinSpin.setValue(0.0)
     tab.jvl_vMaxSpin.setValue(0.1)
     tab.jvl_vStepSpin.setValue(0.1)
@@ -130,7 +130,7 @@ def test_e2e_dual_a_measurement(qtbot, tmp_path):
         qtbot.waitUntil(lambda: not worker.isRunning(), timeout=10000)
 
         # CSVが生成されているか検証
-        expected_csv = tmp_path / "e2e_duala_test_dualA_OPV_measurement_data.csv"
+        expected_csv = tmp_path / "e2e_duala_test_OPV_measurement_data.csv"
         assert os.path.exists(expected_csv)
 
         # CSVの中身を検証し、smubの電流（符号反転された 0.00123）が保存されているか確認

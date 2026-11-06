@@ -13,8 +13,9 @@ def test_main_window_saves_on_close_and_restores_on_next_launch(qtbot, monkeypat
     window1 = MainWindow()
     qtbot.addWidget(window1)
     window1.opv_tab.opv_vMinSpin.setValue(-0.25)
-    window1.jvl_tab.jvl_useLuminanceCheckBox.setChecked(False)
     window1.dual_channel_tab.dual_chA_sampleNameEdit.setText("chA-sample")
+    window1.dual_channel_tab.dual_chA_complianceSpin.setValue(0.0123)
+    window1.dual_channel_tab.dual_chB_complianceSpin.setValue(0.0456)
     window1.sharedSampleNameEdit.setText("shared-dev")
     window1.close()  # closeEvent -> save_settings
 
@@ -24,8 +25,9 @@ def test_main_window_saves_on_close_and_restores_on_next_launch(qtbot, monkeypat
     window2 = MainWindow()
     qtbot.addWidget(window2)
     assert window2.opv_tab.opv_vMinSpin.value() == -0.25
-    assert window2.jvl_tab.jvl_useLuminanceCheckBox.isChecked() is False
     assert window2.dual_channel_tab.dual_chA_sampleNameEdit.text() == "chA-sample"
+    assert window2.dual_channel_tab.dual_chA_complianceSpin.value() == 0.0123
+    assert window2.dual_channel_tab.dual_chB_complianceSpin.value() == 0.0456
     assert window2.sharedSampleNameEdit.text() == "shared-dev"
     window2.close()
 
@@ -39,7 +41,6 @@ def test_main_window_launches_with_defaults_when_no_settings(qtbot, monkeypatch,
     qtbot.addWidget(window)
     assert window.opv_tab.opv_vMinSpin.value() == -0.1
     assert window.jvl_tab.jvl_vMaxSpin.value() == 1.9
-    assert window.jvl_tab.jvl_useLuminanceCheckBox.isChecked() is True
     window.close()
 
 

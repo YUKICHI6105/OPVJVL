@@ -17,11 +17,11 @@ def test_save_and_load_roundtrip(monkeypatch, tmp_path):
     """保存→復元のラウンドトリップで値が維持されることを検証。"""
     _use_tmp_settings(monkeypatch, tmp_path)
 
-    persistence.save_settings({"opv_v_min": -0.5, "jvl_use_luminance": False, "shared_sample_name": "dev01"})
+    persistence.save_settings({"opv_v_min": -0.5, "jvl_hysteresis": True, "shared_sample_name": "dev01"})
     loaded = persistence.load_settings()
 
     assert loaded["opv_v_min"] == -0.5
-    assert loaded["jvl_use_luminance"] is False
+    assert loaded["jvl_hysteresis"] is True
     assert loaded["shared_sample_name"] == "dev01"
 
 

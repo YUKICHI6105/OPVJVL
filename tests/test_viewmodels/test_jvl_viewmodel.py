@@ -18,23 +18,12 @@ def test_jvl_viewmodel_init(qtbot):
     assert not tab.jvl_stopButton.isEnabled()
 
 
-def test_jvl_viewmodel_luminance_checkbox(qtbot):
-    """輝度計チェックボックスの切り替えに伴い、Config構築時のuse_luminance/bm9_portが変化することを検証。"""
+def test_jvl_requests_bm9_at_measurement_start(qtbot):
+    """JVLではBM9の使用可否を測定開始時に確認する。"""
     tab = JVLTab()
     qtbot.addWidget(tab)
     tab.apply_device_settings("keithley2400", "COM5", "COM4")
 
-    assert tab.jvl_useLuminanceCheckBox.isChecked()
-    config = tab._build_config()
-    assert config.use_luminance
-    assert config.bm9_port == "COM4"
-
-    tab.jvl_useLuminanceCheckBox.setChecked(False)
-    config = tab._build_config()
-    assert not config.use_luminance
-    assert config.bm9_port is None
-
-    tab.jvl_useLuminanceCheckBox.setChecked(True)
     config = tab._build_config()
     assert config.use_luminance
     assert config.bm9_port == "COM4"

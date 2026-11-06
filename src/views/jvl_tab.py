@@ -2,7 +2,7 @@
 
 B-6-2節「JVLタブ（jvl_tab.ui）」のウィジェットツリー・objectName命名規則に
 厳密に従い、Pythonコードでウィジェットツリーを構築する。
-OPVタブと同一構成に加え、輝度計(BM9)グループと2ページ構成のプロットタブを持つ。
+OPVタブと同一構成に加え、2ページ構成のプロットタブを持つ。
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from models.measurement.config import JVLConfig
 from models.measurement.csv_writer import jvl_csv_filename, save_points_csv
 from viewmodels.jvl_viewmodel import JVLViewModel
 from views import tab_layout
+from views.luminance_confirm import confirm_luminance_use
 from views.notify_sound import dismiss_completion_alarm, play_completion_sound
 from views.plot_buffer import (
     DualAxisPlotBuffer,
@@ -52,6 +53,9 @@ class JVLTab(QtWidgets.QWidget):
         self._channel = "smua"
         self._use_mock = False
         self._last_result = None  # (points, include_luminance) 最後に完了/中断した測定結果
+        self._active_forward_point_count = None
+        self._last_forward_point_count = None
+        self._active_use_luminance = False
         self._contact_check_running = False
         self._build_ui()
 
@@ -85,26 +89,15 @@ class JVLTab(QtWidgets.QWidget):
         """共通レイアウトビルダー(views/tab_layout.py)でタブを構築する。
 
         OPVタブと同一のコードパスを通すことで、レイアウト差の発生を
-        構造的に防ぐ(review.md指摘#3)。JVL固有の輝度計チェックボックスは
-        ``extra_rows`` フックで測定設定グループ末尾へ差し込む。左右分割は
+        構造的に防ぐ(review.md指摘#3)。左右分割は
         メインウィンドウ直下のQSplitterが担うため(review.md指摘#1)、このタブ
         自身は設定カラムの中身だけを持ち、表示パネル/ログはMainWindowへ
         ``display_panel()``/``log_widget()``経由で渡す。
         """
-        # JVL固有: 輝度計(BM9)チェックボックス(BM9ポート自体は「機器設定」
-        # ダイアログへ移動済みのため、輝度計測有無のチェックボックスのみ持つ)
-        self.jvl_useLuminanceCheckBox = QtWidgets.QCheckBox(
-            "BM9で輝度も測定する(OFFで暗IV測定)", objectName="jvl_useLuminanceCheckBox"
-        )
-        self.jvl_useLuminanceCheckBox.setChecked(True)
-
-        def _add_luminance_row(form_layout: QtWidgets.QFormLayout) -> None:
-            form_layout.addRow("輝度計(BM9):", self.jvl_useLuminanceCheckBox)
-
-        # 測定設定グループ(JVL固有の初期値のみ指定。行構成はOPVと共通)
+        # 測定設定グループ。回数・NPLC・遅延・電流上限を共通の1行にまとめる。
         jvl_measurementGroupBox, measurement_widgets = tab_layout.build_measurement_group(
             "jvl", v_min_default=-1.0, v_max_default=1.9, v_step_default=0.1,
-            sweep_single_step=0.1, extra_rows=_add_luminance_row,
+            sweep_single_step=0.1,
         )
         self.jvl_vMinSpin = measurement_widgets["v_min"]
         self.jvl_vMaxSpin = measurement_widgets["v_max"]
@@ -218,8 +211,6 @@ class JVLTab(QtWidgets.QWidget):
         self._use_mock = use_mock
 
     def _build_config(self) -> JVLConfig:
-        use_luminance = self.jvl_useLuminanceCheckBox.isChecked()
-        bm9_port = self._bm9_port if use_luminance else None
         return JVLConfig(
             device_type=self._device_type,
             connection=self._connection,
@@ -233,8 +224,8 @@ class JVLTab(QtWidgets.QWidget):
             delay_time=self.jvl_delaySpin.value(),
             sample_name=self.jvl_sampleNameEdit.text().strip() or "sample",
             save_dir=self.jvl_saveDirEdit.text().strip() or ".",
-            use_luminance=use_luminance,
-            bm9_port=bm9_port,
+            use_luminance=True,
+            bm9_port=self._bm9_port,
             channel=self._channel,
             hysteresis=self.jvl_hysteresisCheckBox.isChecked(),
         )
@@ -249,12 +240,22 @@ class JVLTab(QtWidgets.QWidget):
         planned_path = os.path.join(config.save_dir, jvl_csv_filename(config.sample_name))
         if not confirm_overwrite(self, [planned_path]):
             return
+        if config.use_luminance:
+            decision = confirm_luminance_use(self, config.bm9_port, config.use_mock)
+            if decision is None:
+                return
+            if not decision:
+                config.use_luminance = False
+                config.bm9_port = None
+                self._append_log("BM9を使用せず、電流のみ測定します。")
+        self._active_use_luminance = config.use_luminance
         total_points = len(config.build_voltage_list())
         dismiss_completion_alarm()
         set_measurement_completed(self.jvl_progressBar, False)
         self.jvl_progressBar.setMaximum(max(total_points, 1))
         self.jvl_progressBar.setValue(0)
         reverse_from_index = config.forward_point_count() if config.hysteresis else None
+        self._active_forward_point_count = reverse_from_index
         # review.md指摘#6: JVLタブのみ凡例名を指定して凡例を表示する
         self._iv_plot_buffer = PlotBuffer(
             self.jvl_ivPlotWidget, curve_name="Current", reverse_from_index=reverse_from_index
@@ -294,7 +295,6 @@ class JVLTab(QtWidgets.QWidget):
     def _on_running_changed(self, running: bool) -> None:
         self.jvl_startButton.setEnabled(not running)
         self.jvl_stopButton.setEnabled(running)
-        self.jvl_useLuminanceCheckBox.setEnabled(not running)
         self.jvl_hysteresisCheckBox.setEnabled(not running)
         if not self._contact_check_running:
             self.jvl_contactCheckButton.setEnabled(not running)
@@ -327,7 +327,8 @@ class JVLTab(QtWidgets.QWidget):
         QtWidgets.QMessageBox.warning(self, "入力エラー", message)
 
     def _on_finished_ok(self, points: list, csv_path: str, aborted: bool) -> None:
-        self._last_result = (points, self.jvl_useLuminanceCheckBox.isChecked())
+        self._last_forward_point_count = self._active_forward_point_count
+        self._last_result = (points, self._active_use_luminance)
         set_measurement_completed(self.jvl_progressBar, not aborted)
         play_completion_sound("aborted" if aborted else "success", self)
 
@@ -350,7 +351,7 @@ class JVLTab(QtWidgets.QWidget):
         )
         if not path:
             return
-        save_points_csv(points, path, include_luminance)
+        save_points_csv(points, path, include_luminance, self._last_forward_point_count)
         self._append_log(f"測定データを保存しました: {path}")
 
     # ------------------------------------------------------------------
@@ -369,7 +370,6 @@ class JVLTab(QtWidgets.QWidget):
             "jvl_nplc": self.jvl_nplcSpin,
             "jvl_delay": self.jvl_delaySpin,
             "jvl_compliance": self.jvl_complianceSpin,
-            "jvl_use_luminance": self.jvl_useLuminanceCheckBox,
             "jvl_hysteresis": self.jvl_hysteresisCheckBox,
             "jvl_contact_check_threshold": self.jvl_contactCheckThresholdSpin,
             "jvl_contact_check_v_max": self.jvl_contactCheckVMaxSpin,
