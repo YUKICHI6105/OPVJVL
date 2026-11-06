@@ -16,7 +16,7 @@ from typing import Callable, Iterator, Optional, Union
 import numpy as np
 
 from ..instruments.base import AbstractLuminanceMeter, AbstractSourceMeter
-from .config import DualAConfig, DualBConfig, JVLConfig, OPVConfig
+from .config import ChannelConfig, DualAConfig, DualBConfig, JVLConfig, OPVConfig
 from .result import ChannelPoint, IVLPoint, IVPoint
 
 
@@ -242,6 +242,10 @@ def run_dual_b_sequence(
     is_aborted: Callable[[], bool],
     sleep_fn: Callable[[float], None] = time.sleep,
     luminance_meter: Optional[AbstractLuminanceMeter] = None,
+    take_pending_channel: Optional[Callable[[], Optional[tuple[str, ChannelConfig]]]] = None,
+    get_luminance_meter: Optional[Callable[[], Optional[AbstractLuminanceMeter]]] = None,
+    finish_if_no_pending: Optional[Callable[[], bool]] = None,
+    is_channel_aborted: Optional[Callable[[str], bool]] = None,
 ) -> Iterator[ChannelPoint]:
     """モードB(2素子同時計測)のロックステップ制御シーケンス。B-4-4節。
 
@@ -250,6 +254,14 @@ def run_dual_b_sequence(
     設定するが、測定・emitはその回スキップする(無駄なデータ点を
     記録しない)。
     """
+    if take_pending_channel is not None:
+        yield from _run_dual_b_joinable_sequence(
+            smu, config, is_aborted, sleep_fn, luminance_meter,
+            take_pending_channel, get_luminance_meter,
+            finish_if_no_pending, is_channel_aborted,
+        )
+        return
+
     chan_a = config.channel_a
     chan_b = config.channel_b
     va_list = chan_a.build_voltage_list() if chan_a.enabled else np.array([])
@@ -325,6 +337,115 @@ def run_dual_b_sequence(
                     current=current_b,
                     luminance=luminance_b,
                 )
+    finally:
+        smu.set_output("smua", False)
+        smu.set_output("smub", False)
+
+
+def _run_dual_b_joinable_sequence(
+    smu: AbstractSourceMeter,
+    config: DualBConfig,
+    is_aborted: Callable[[], bool],
+    sleep_fn: Callable[[float], None],
+    luminance_meter: Optional[AbstractLuminanceMeter],
+    take_pending_channel: Callable[[], Optional[tuple[str, ChannelConfig]]],
+    get_luminance_meter: Optional[Callable[[], Optional[AbstractLuminanceMeter]]],
+    finish_if_no_pending: Optional[Callable[[], bool]],
+    is_channel_aborted: Optional[Callable[[str], bool]],
+) -> Iterator[ChannelPoint]:
+    """同じSMUを保持したまま、空きチャンネルを次の掃引点から追加する。"""
+    channels = {"A": config.channel_a, "B": config.channel_b}
+    source_names = {"A": "smua", "B": "smub"}
+    voltages = {
+        key: channel.build_voltage_list() if channel.enabled else np.array([])
+        for key, channel in channels.items()
+    }
+    positions = {"A": 0, "B": 0}
+    stopped = set()
+
+    def stop_requested_channels() -> None:
+        if is_channel_aborted is None:
+            return
+        for key in ("A", "B"):
+            if key in stopped or not channels[key].enabled or not is_channel_aborted(key):
+                continue
+            stopped.add(key)
+            positions[key] = len(voltages[key])
+            smu.set_output(source_names[key], False)
+
+    def stop_is_pending() -> bool:
+        return bool(is_channel_aborted and any(
+            key not in stopped and channels[key].enabled and is_channel_aborted(key)
+            for key in ("A", "B")
+        ))
+
+    smu.reset()
+    for key, channel in channels.items():
+        if channel.enabled:
+            smu.configure_source_voltage(source_names[key], channel.compliance_current, channel.nplc)
+            smu.set_output(source_names[key], True)
+    try:
+        while not is_aborted():
+            pending = take_pending_channel()
+            if pending is not None:
+                if is_aborted():
+                    break
+                key, channel = pending
+                if channels[key].enabled:
+                    raise ValueError(f"チャンネル{key}は既に測定中です。")
+                channels[key] = channel
+                if key == "A":
+                    config.channel_a = channel
+                else:
+                    config.channel_b = channel
+                voltages[key] = channel.build_voltage_list()
+                positions[key] = 0
+                smu.configure_source_voltage(source_names[key], channel.compliance_current, channel.nplc)
+                smu.set_output(source_names[key], True)
+
+            stop_requested_channels()
+
+            if all(positions[key] >= len(voltages[key]) for key in channels):
+                if finish_if_no_pending is None or finish_if_no_pending():
+                    break
+                continue
+
+            for key, channel in channels.items():
+                if not channel.enabled or key in stopped:
+                    continue
+                voltage_list = voltages[key]
+                index = positions[key]
+                voltage = (float(voltage_list[index]) if index < len(voltage_list)
+                           else _hold_voltage(voltage_list, channel.hold_at_end))
+                smu.set_voltage(source_names[key], voltage)
+
+            _interruptible_sleep(
+                max(channel.delay_time for key, channel in channels.items()
+                    if channel.enabled and key not in stopped),
+                sleep_fn, lambda: is_aborted() or stop_is_pending(),
+            )
+            if is_aborted():
+                break
+            if stop_is_pending():
+                stop_requested_channels()
+                continue  # 残りのチャンネルは必要な遅延を取り直してから測定する
+            stop_requested_channels()
+
+            for key, channel in channels.items():
+                index = positions[key]
+                voltage_list = voltages[key]
+                if not channel.enabled or key in stopped or index >= len(voltage_list):
+                    continue
+                current = smu.measure_current(source_names[key])
+                meter = get_luminance_meter() if get_luminance_meter else luminance_meter
+                if meter is not None and hasattr(meter, "update_reference_current"):
+                    meter.update_reference_current(current)
+                luminance = (
+                    meter.get_luminance() * 100
+                    if channel.device_mode == "発光素子" and meter is not None else None
+                )
+                positions[key] += 1
+                yield ChannelPoint(key, index, float(voltage_list[index]), current, luminance)
     finally:
         smu.set_output("smua", False)
         smu.set_output("smub", False)

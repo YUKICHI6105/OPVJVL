@@ -17,6 +17,43 @@ def _buttons(window):
     )
 
 
+def test_channel_start_buttons_share_mode_b_lock(qtbot, monkeypatch, tmp_path):
+    from models.measurement.config import ChannelConfig, DualBConfig
+    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    window = MainWindow()
+    qtbot.addWidget(window)
+    tab = window.dual_channel_tab
+    buttons = (tab.dual_chA_startButton, tab.dual_chB_startButton, tab.dual_b_startButton)
+    assert all(button.isEnabled() for button in buttons)
+    tab.viewModel.running_changed_b.emit(True)
+    assert all(not button.isEnabled() for button in buttons)
+    tab.viewModel.running_changed_b.emit(False)
+    assert all(button.isEnabled() for button in buttons)
+    tab._active_mode_b_config = DualBConfig(
+        channel_a=ChannelConfig(enabled=True),
+        channel_b=ChannelConfig(enabled=False),
+    )
+    tab._mode_b_reserved_channels = {"A": True, "B": False}
+    tab.viewModel.running_changed_b.emit(True)
+    assert tab.dual_chA_startButton.isEnabled()
+    assert tab.dual_chA_startButton.text() == "このチャネルを中断"
+    assert tab.dual_chB_startButton.isEnabled()
+    assert not tab.dual_b_startButton.isEnabled()
+    tab._mode_b_reserved_channels["B"] = True
+    window._update_start_button_locks()
+    assert tab.dual_chB_startButton.isEnabled()
+    tab._mode_b_stopped_channels["A"] = True
+    tab._update_mode_b_channel_buttons(True)
+    window._update_start_button_locks()
+    assert not tab.dual_chA_startButton.isEnabled()
+    assert tab.dual_chA_startButton.text() == "中断済み"
+    tab.viewModel.running_changed_b.emit(False)
+    tab.viewModel.running_changed_a.emit(True)
+    assert all(not button.isEnabled() for button in buttons)
+    tab.viewModel.running_changed_a.emit(False)
+    window.close()
+
+
 def test_opv_jvl_always_mutually_exclusive(qtbot, monkeypatch, tmp_path):
     monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
     window = MainWindow()

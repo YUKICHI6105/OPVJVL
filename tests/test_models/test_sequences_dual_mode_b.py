@@ -84,6 +84,69 @@ def test_run_dual_b_sequence_one_channel():
         assert p.channel == "A"
 
 
+@pytest.mark.parametrize("initial", ["A", "B"])
+def test_idle_channel_can_join_without_resetting_active_sweep(initial):
+    ch_a = ChannelConfig(enabled=True, v_min=0, v_max=0.3, v_step=0.1,
+                         iteration=1, delay_time=0)
+    ch_b = ChannelConfig(enabled=True, v_min=0.5, v_max=0.6, v_step=0.1,
+                         iteration=1, delay_time=0)
+    join_key = "B" if initial == "A" else "A"
+    config = DualBConfig(
+        channel_a=ch_a if initial == "A" else ChannelConfig(enabled=False),
+        channel_b=ch_b if initial == "B" else ChannelConfig(enabled=False),
+    )
+    smu = Keithley2612BMock(connection="MOCK")
+    smu.connect()
+    added = False
+
+    def take_pending():
+        nonlocal added
+        if smu._measure_count >= 1 and not added:
+            added = True
+            return join_key, ch_b if join_key == "B" else ch_a
+        return None
+
+    points = list(run_dual_b_sequence(
+        smu, config, lambda: False, sleep_fn=lambda _: None,
+        take_pending_channel=take_pending,
+    ))
+    a = [p for p in points if p.channel == "A"]
+    b = [p for p in points if p.channel == "B"]
+    assert [p.index for p in a] == [0, 1, 2, 3]
+    assert [p.index for p in b] == [0, 1]
+    assert [p.voltage for p in b] == [0.5, 0.6]
+    assert smu.reset_calls == 1
+    assert smu.output_calls.count(("smua", True)) == 1
+    assert smu.output_calls.count(("smub", True)) == 1
+
+
+@pytest.mark.parametrize("stopped_channel", ["A", "B"])
+def test_stopping_one_channel_keeps_other_channel_running(stopped_channel):
+    channels = {
+        key: ChannelConfig(enabled=True, v_min=0, v_max=0.3, v_step=0.1,
+                           iteration=1, delay_time=0)
+        for key in ("A", "B")
+    }
+    config = DualBConfig(channel_a=channels["A"], channel_b=channels["B"])
+    smu = Keithley2612BMock(connection="MOCK")
+    smu.connect()
+    cancelled = set()
+    points = []
+    for point in run_dual_b_sequence(
+        smu, config, lambda: False, sleep_fn=lambda _: None,
+        take_pending_channel=lambda: None,
+        is_channel_aborted=lambda key: key in cancelled,
+    ):
+        points.append(point)
+        if point.channel == stopped_channel:
+            cancelled.add(stopped_channel)
+
+    other = "B" if stopped_channel == "A" else "A"
+    assert len([p for p in points if p.channel == stopped_channel]) == 1
+    assert len([p for p in points if p.channel == other]) == 4
+    assert smu.output_calls.count(("smua" if stopped_channel == "A" else "smub", False)) >= 2
+
+
 def test_run_dual_b_sequence_with_bm9():
     """モードBで一方のチャンネルで輝度計を使用する場合を検証。"""
     ch_a = ChannelConfig(

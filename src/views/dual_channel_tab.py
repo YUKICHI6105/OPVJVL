@@ -16,9 +16,11 @@ from models.measurement.csv_writer import (
     dual_a_csv_filename,
     dual_b_csv_filename,
     save_points_csv,
+    validate_dual_b_filenames,
 )
 from viewmodels.dual_channel_viewmodel import DualChannelViewModel
 from views import tab_layout
+from views.luminance_confirm import confirm_luminance_use
 from views.notify_sound import dismiss_completion_alarm, play_completion_sound
 from views.plot_buffer import (
     DualAxisPlotBuffer,
@@ -30,6 +32,7 @@ from views.plot_buffer import (
 from views.progress_bar import set_measurement_completed
 from views.save_confirm import confirm_overwrite, ensure_save_dir
 from views.tab_layout import make_double_spin as _make_double_spin
+from views.widgets.no_scroll_combobox import NoScrollComboBox
 
 DEVICE_MODE_ITEMS = ["太陽電池", "発光素子"]
 _DEVICE_TYPE_2612B = "keithley2612b"
@@ -54,8 +57,16 @@ class DualChannelTab(QtWidgets.QWidget):
         self._plot_buffer_b_chb = None
 
         # 最後に完了/中断した測定結果(「別名保存」用)
-        self._last_result_a = None  # (points, device_mode)
+        self._last_result_a = None  # (points, device_mode, use_luminance)
         self._last_result_b = None  # {"A": (points, device_mode, use_luminance), "B": (...)}
+        self._active_forward_point_count_a = None
+        self._last_forward_point_count_a = None
+        self._active_mode_a_use_luminance = False
+        self._active_forward_point_count_b = {"A": None, "B": None}
+        self._last_forward_point_count_b = {"A": None, "B": None}
+        self._active_mode_b_config: Optional[DualBConfig] = None
+        self._mode_b_reserved_channels = {"A": False, "B": False}
+        self._mode_b_stopped_channels = {"A": False, "B": False}
 
         # 機器設定(接続先・輝度計ポート)は「機器設定」ダイアログ(MainWindowのメニュー
         # バー経由)から `apply_device_settings_mode_a`/`_mode_b` によって注入される。
@@ -92,7 +103,9 @@ class DualChannelTab(QtWidgets.QWidget):
         """ViewModelとの結線を行う。__init__から一度だけ呼ぶこと(二重結線防止)。"""
         self.dual_a_startButton.clicked.connect(self._on_mode_a_start_clicked)
         self.dual_a_stopButton.clicked.connect(self._on_mode_a_stop_clicked)
-        self.dual_b_startButton.clicked.connect(self._on_mode_b_start_clicked)
+        self.dual_b_startButton.clicked.connect(lambda: self._on_mode_b_start_clicked())
+        self.dual_chA_startButton.clicked.connect(lambda: self._on_mode_b_channel_button_clicked("A"))
+        self.dual_chB_startButton.clicked.connect(lambda: self._on_mode_b_channel_button_clicked("B"))
         self.dual_b_stopButton.clicked.connect(self._on_mode_b_stop_clicked)
 
         # ViewModelからのシグナル購読
@@ -232,45 +245,39 @@ class DualChannelTab(QtWidgets.QWidget):
         )
         dual_a_measurementFormLayout = QtWidgets.QFormLayout(dual_a_measurementGroupBox)
 
-        self.dual_a_deviceModeCombo = QtWidgets.QComboBox(objectName="dual_a_deviceModeCombo")
+        self.dual_a_deviceModeCombo = NoScrollComboBox(objectName="dual_a_deviceModeCombo")
         self.dual_a_deviceModeCombo.addItems(DEVICE_MODE_ITEMS)
-        dual_a_measurementFormLayout.addRow("計測対象:", self.dual_a_deviceModeCombo)
+        self.dual_a_hysteresisCheckBox = QtWidgets.QCheckBox(
+            "ヒステリシス測定", objectName="dual_a_hysteresisCheckBox"
+        )
+        self.dual_a_hysteresisCheckBox.setToolTip("往復掃引")
+        dual_a_deviceModeRow = QtWidgets.QHBoxLayout()
+        dual_a_deviceModeRow.setObjectName("dual_a_deviceModeRow")
+        dual_a_deviceModeRow.addWidget(self.dual_a_deviceModeCombo)
+        dual_a_deviceModeRow.addWidget(self.dual_a_hysteresisCheckBox)
+        dual_a_measurementFormLayout.addRow("計測対象:", dual_a_deviceModeRow)
 
         self.dual_a_vMinSpin = _make_double_spin("dual_a_vMinSpin", -20.0, 20.0, 3, 0.01, -0.1, "")
         self.dual_a_vMaxSpin = _make_double_spin("dual_a_vMaxSpin", -20.0, 20.0, 3, 0.01, 1.1, "")
         self.dual_a_vStepSpin = _make_double_spin("dual_a_vStepSpin", 0.001, 10.0, 3, 0.01, 0.02, "")
-        dual_a_sweepRow = QtWidgets.QHBoxLayout()
-        dual_a_sweepRow.setObjectName("dual_a_sweepRow")
-        dual_a_sweepRow.addWidget(self.dual_a_vMinSpin)
-        dual_a_sweepRow.addWidget(self.dual_a_vMaxSpin)
-        dual_a_sweepRow.addWidget(self.dual_a_vStepSpin)
-        dual_a_measurementFormLayout.addRow("電圧掃引(Vmin/Vmax/Vstep):", dual_a_sweepRow)
+        dual_a_measurementFormLayout.addRow(tab_layout.labeled_fields("dual_a_sweepRow", [
+            ("開始 [V]", self.dual_a_vMinSpin), ("終了 [V]", self.dual_a_vMaxSpin),
+            ("ステップ [V]", self.dual_a_vStepSpin),
+        ]))
 
         self.dual_a_iterationSpin = tab_layout.make_iteration_spin("dual_a_iterationSpin")
         # NPLC上限25.0はKeithley2612Bの仕様上限。初期値25.0はベースコード
         # (bases/keithley2600/OPV_measurement_ver2.py)の積分時間0.5秒
         # (50Hzで25NPLC相当)に合わせる。
         self.dual_a_nplcSpin = _make_double_spin("dual_a_nplcSpin", 0.01, 25.0, 2, 0.1, 25.0)
-        dual_a_iterationNplcRow = QtWidgets.QHBoxLayout()
-        dual_a_iterationNplcRow.setObjectName("dual_a_iterationNplcRow")
-        dual_a_iterationNplcRow.addWidget(self.dual_a_iterationSpin)
-        dual_a_iterationNplcRow.addWidget(self.dual_a_nplcSpin)
-        dual_a_measurementFormLayout.addRow("繰り返し回数/積分時間(NPLC):", dual_a_iterationNplcRow)
-
         self.dual_a_delaySpin = _make_double_spin("dual_a_delaySpin", 0.0, 60.0, 2, 0.1, 1.0, "")
         self.dual_a_complianceSpin = _make_double_spin(
             "dual_a_complianceSpin", 0.0001, 1.0, 4, 0.001, 0.02, ""
         )
-        dual_a_delayComplianceRow = QtWidgets.QHBoxLayout()
-        dual_a_delayComplianceRow.setObjectName("dual_a_delayComplianceRow")
-        dual_a_delayComplianceRow.addWidget(self.dual_a_delaySpin)
-        dual_a_delayComplianceRow.addWidget(self.dual_a_complianceSpin)
-        dual_a_measurementFormLayout.addRow("遅延時間[s]/コンプライアンス電流[A]:", dual_a_delayComplianceRow)
-
-        self.dual_a_hysteresisCheckBox = QtWidgets.QCheckBox(
-            "ヒステリシス測定(往復掃引)", objectName="dual_a_hysteresisCheckBox"
-        )
-        dual_a_measurementFormLayout.addRow(self.dual_a_hysteresisCheckBox)
+        dual_a_measurementFormLayout.addRow(tab_layout.labeled_fields("dual_a_timingRow", [
+            ("各電圧の回数", self.dual_a_iterationSpin), ("NPLC", self.dual_a_nplcSpin),
+            ("遅延 [s]", self.dual_a_delaySpin), ("電流上限 [A]", self.dual_a_complianceSpin),
+        ]))
 
         # 保存・実行
         dual_a_saveRunGroupBox = QtWidgets.QGroupBox("保存・実行", objectName="dual_a_saveRunGroupBox")
@@ -298,6 +305,11 @@ class DualChannelTab(QtWidgets.QWidget):
             dual_a_saveDirRow.addWidget(self.dual_a_browseSaveDirButton)
             dual_a_saveRunFormLayout.addRow("保存先:", dual_a_saveDirRow)
 
+        dual_a_saveRunFormLayout.addRow(tab_layout.filename_preview(
+            "dual_a", self.dual_a_sampleNameEdit,
+            lambda name: dual_a_csv_filename(name, self.dual_a_deviceModeCombo.currentText()),
+            self.dual_a_deviceModeCombo,
+        ))
         dual_a_runRow = QtWidgets.QHBoxLayout()
         dual_a_runRow.setObjectName("dual_a_runRow")
         # ショートカット(F5/Esc)をボタンのラベルに明記する(review.md項目4)。
@@ -342,8 +354,7 @@ class DualChannelTab(QtWidgets.QWidget):
         """モードBページ。共通レイアウトビルダー(views/tab_layout.py)で
         他タブ・モードAと同一のコードパスで設定カラムを構築する
         (左右分割はメインウィンドウ直下のQSplitterが担う。review.md指摘#1)。
-        モードBの設定グループの中身(共通設定/チャンネルA/チャンネルB/実行)は
-        現状維持で変更しない(review.md指摘#2)。
+        共通保存先、チャンネルA/Bの設定と個別開始、同時開始・中断を配置する。
         """
         dual_modeBPage = QtWidgets.QWidget(objectName="dual_modeBPage")
 
@@ -366,7 +377,9 @@ class DualChannelTab(QtWidgets.QWidget):
         self.dual_b_logTextEdit = QtWidgets.QTextEdit(objectName="dual_b_logTextEdit")
         self.dual_b_logTextEdit.setReadOnly(True)
 
-        tab_layout.build_settings_column(dual_modeBPage, "dual_b", settings_groups=settings_groups)
+        tab_layout.build_settings_column(
+            dual_modeBPage, "dual_b", settings_groups=settings_groups[:-1], footer=settings_groups[-1]
+        )
         self._dual_b_display_panel = tab_layout.build_display_panel(
             "dual_b", self.dual_b_displayTabWidget, self.dual_b_progressBar
         )
@@ -377,7 +390,7 @@ class DualChannelTab(QtWidgets.QWidget):
         # 共通設定(保存先をまとめて1つのGroupBoxに集約。接続先/BM9ポートは
         # 「機器設定」ダイアログへ移動済み)
         dual_b_commonGroupBox = QtWidgets.QGroupBox(
-            "共通設定(BM9 / 保存)", objectName="dual_b_connectionGroupBox"
+            "保存先（チャンネルA・B共通）", objectName="dual_b_connectionGroupBox"
         )
         dual_b_commonFormLayout = QtWidgets.QFormLayout(dual_b_commonGroupBox)
         # モードBの保存先はチャンネルA/B共通の1つの保存先だが、共通保存設定パネル
@@ -395,7 +408,7 @@ class DualChannelTab(QtWidgets.QWidget):
 
         # チャンネルA/B(設定カラムの幅に収まるよう、横並びではなく縦に積む)
         (
-            self.dual_chA_enableCheckBox,
+            self.dual_chA_startButton,
             self.dual_chA_deviceModeCombo,
             self.dual_chA_vMinSpin,
             self.dual_chA_vMaxSpin,
@@ -403,8 +416,7 @@ class DualChannelTab(QtWidgets.QWidget):
             self.dual_chA_iterationSpin,
             self.dual_chA_nplcSpin,
             self.dual_chA_delaySpin,
-            self.dual_chA_luminanceGroupBox,
-            self.dual_chA_useBm9CheckBox,
+            self.dual_chA_complianceSpin,
             self.dual_chA_sampleNameEdit,
             self.dual_chA_hysteresisCheckBox,
             self.dual_chA_contactCheckThresholdSpin,
@@ -414,7 +426,7 @@ class DualChannelTab(QtWidgets.QWidget):
             channelAGroupBox,
         ) = self._build_channel_group("chA", "チャンネルA (smua)")
         (
-            self.dual_chB_enableCheckBox,
+            self.dual_chB_startButton,
             self.dual_chB_deviceModeCombo,
             self.dual_chB_vMinSpin,
             self.dual_chB_vMaxSpin,
@@ -422,8 +434,7 @@ class DualChannelTab(QtWidgets.QWidget):
             self.dual_chB_iterationSpin,
             self.dual_chB_nplcSpin,
             self.dual_chB_delaySpin,
-            self.dual_chB_luminanceGroupBox,
-            self.dual_chB_useBm9CheckBox,
+            self.dual_chB_complianceSpin,
             self.dual_chB_sampleNameEdit,
             self.dual_chB_hysteresisCheckBox,
             self.dual_chB_contactCheckThresholdSpin,
@@ -447,7 +458,7 @@ class DualChannelTab(QtWidgets.QWidget):
         dual_b_buttonRow = QtWidgets.QHBoxLayout()
         dual_b_buttonRow.setObjectName("dual_b_buttonRow")
         # ショートカット(F5/Esc)をボタンのラベルに明記する(review.md項目4)。
-        self.dual_b_startButton = QtWidgets.QPushButton("測定開始 (F5)", objectName="dual_b_startButton")
+        self.dual_b_startButton = QtWidgets.QPushButton("A・B同時測定開始 (F5)", objectName="dual_b_startButton")
         self.dual_b_stopButton = QtWidgets.QPushButton("中断 (Esc)", objectName="dual_b_stopButton")
         self.dual_b_stopButton.setEnabled(False)
         dual_b_buttonRow.addWidget(self.dual_b_startButton)
@@ -466,54 +477,56 @@ class DualChannelTab(QtWidgets.QWidget):
         group_box = QtWidgets.QGroupBox(title, objectName=group_box_object_name)
         form_layout = QtWidgets.QFormLayout(group_box)
         form_layout.setObjectName(f"dual_{ch_prefix}_formLayout")
+        start_button = QtWidgets.QPushButton(
+            "このチャネルを測定開始", objectName=f"dual_{ch_prefix}_startButton"
+        )
+        contact_check_button = QtWidgets.QPushButton(
+            "接触確認", objectName=f"dual_{ch_prefix}_contactCheckButton"
+        )
+        action_row = QtWidgets.QHBoxLayout()
+        action_row.setObjectName(f"dual_{ch_prefix}_actionRow")
+        action_row.addWidget(start_button)
+        action_row.addWidget(contact_check_button)
 
-        enable_checkbox = QtWidgets.QCheckBox("有効", objectName=f"dual_{ch_prefix}_enableCheckBox")
-        form_layout.addRow(enable_checkbox)
-
-        device_mode_combo = QtWidgets.QComboBox(objectName=f"dual_{ch_prefix}_deviceModeCombo")
+        device_mode_combo = NoScrollComboBox(objectName=f"dual_{ch_prefix}_deviceModeCombo")
         device_mode_combo.addItems(DEVICE_MODE_ITEMS)
-        form_layout.addRow("計測対象:", device_mode_combo)
+        hysteresis_checkbox = QtWidgets.QCheckBox(
+            "ヒステリシス測定", objectName=f"dual_{ch_prefix}_hysteresisCheckBox"
+        )
+        hysteresis_checkbox.setToolTip("往復掃引")
+        device_mode_row = QtWidgets.QHBoxLayout()
+        device_mode_row.setObjectName(f"dual_{ch_prefix}_deviceModeRow")
+        device_mode_row.addWidget(device_mode_combo)
+        device_mode_row.addWidget(hysteresis_checkbox)
+        form_layout.addRow("計測対象:", device_mode_row)
 
         v_min_spin = _make_double_spin(f"dual_{ch_prefix}_vMinSpin", -20.0, 20.0, 3, 0.01, -0.1, "")
         v_max_spin = _make_double_spin(f"dual_{ch_prefix}_vMaxSpin", -20.0, 20.0, 3, 0.01, 1.1, "")
         v_step_spin = _make_double_spin(f"dual_{ch_prefix}_vStepSpin", 0.001, 10.0, 3, 0.01, 0.02, "")
-        sweep_row = QtWidgets.QHBoxLayout()
-        sweep_row.setObjectName(f"dual_{ch_prefix}_sweepRow")
-        sweep_row.addWidget(v_min_spin)
-        sweep_row.addWidget(v_max_spin)
-        sweep_row.addWidget(v_step_spin)
-        form_layout.addRow("電圧掃引 (V):", sweep_row)
+        form_layout.addRow(tab_layout.labeled_fields(f"dual_{ch_prefix}_sweepRow", [
+            ("開始 [V]", v_min_spin), ("終了 [V]", v_max_spin), ("ステップ [V]", v_step_spin),
+        ]))
 
         iteration_spin = tab_layout.make_iteration_spin(f"dual_{ch_prefix}_iterationSpin")
 
         # NPLC上限25.0はKeithley2612Bの仕様上限(初期値は1.0のまま)。
         nplc_spin = _make_double_spin(f"dual_{ch_prefix}_nplcSpin", 0.01, 25.0, 2, 0.1, 1.0)
         delay_spin = _make_double_spin(f"dual_{ch_prefix}_delaySpin", 0.0, 60.0, 2, 0.1, 1.0, "")
-        timing_row = QtWidgets.QHBoxLayout()
-        timing_row.setObjectName(f"dual_{ch_prefix}_timingRow")
-        timing_row.addWidget(iteration_spin)
-        timing_row.addWidget(nplc_spin)
-        timing_row.addWidget(delay_spin)
-        form_layout.addRow("繰り返し回数/NPLC/遅延[s]:", timing_row)
-
-        # 輝度計測(BM9共有): ネストしたGroupBoxではなく、通常のQWidget行として組み込む。
-        # `dual_{ch_prefix}_luminanceGroupBox`という属性名・setVisible等の呼び出しは維持する。
-        luminance_group_box = QtWidgets.QWidget(objectName=f"dual_{ch_prefix}_luminanceGroupBox")
-        luminance_layout = QtWidgets.QHBoxLayout(luminance_group_box)
-        luminance_layout.setContentsMargins(0, 0, 0, 0)
-        use_bm9_checkbox = QtWidgets.QCheckBox(
-            "BM9を使用する", objectName=f"dual_{ch_prefix}_useBm9CheckBox"
+        compliance_spin = _make_double_spin(
+            f"dual_{ch_prefix}_complianceSpin", 0.0001, 1.0, 4, 0.001, 0.02, ""
         )
-        luminance_layout.addWidget(use_bm9_checkbox)
-        form_layout.addRow("輝度計測:", luminance_group_box)
+        form_layout.addRow(tab_layout.labeled_fields(f"dual_{ch_prefix}_timingRow", [
+            ("各電圧の回数", iteration_spin), ("NPLC", nplc_spin),
+            ("遅延 [s]", delay_spin), ("電流上限 [A]", compliance_spin),
+        ]))
 
         sample_name_edit = QtWidgets.QLineEdit(objectName=f"dual_{ch_prefix}_sampleNameEdit")
         form_layout.addRow("サンプル名:", sample_name_edit)
-
-        hysteresis_checkbox = QtWidgets.QCheckBox(
-            "ヒステリシス測定(往復掃引)", objectName=f"dual_{ch_prefix}_hysteresisCheckBox"
-        )
-        form_layout.addRow(hysteresis_checkbox)
+        form_layout.addRow(tab_layout.filename_preview(
+            f"dual_{ch_prefix}", sample_name_edit,
+            lambda name: dual_b_csv_filename(name, ch_prefix[-1], device_mode_combo.currentText()),
+            device_mode_combo,
+        ))
 
         # 接触確認(チャンネルのdevice_modeに応じてOPV式/JVL式を自動切替。
         # モードBの物理SMUは1台共有のため、チャンネルA/Bの接触確認は
@@ -523,9 +536,6 @@ class DualChannelTab(QtWidgets.QWidget):
         )
         contact_check_v_max_spin = _make_double_spin(
             f"dual_{ch_prefix}_contactCheckVMaxSpin", 0.1, 20.0, 2, 0.1, 5.0, "V"
-        )
-        contact_check_button = QtWidgets.QPushButton(
-            "接触確認", objectName=f"dual_{ch_prefix}_contactCheckButton"
         )
         contact_check_reading_label = QtWidgets.QLabel(
             "電流: -", objectName=f"dual_{ch_prefix}_contactCheckReadingLabel"
@@ -537,11 +547,11 @@ class DualChannelTab(QtWidgets.QWidget):
         contact_check_row.addWidget(QtWidgets.QLabel("最大電圧[V]:"))
         contact_check_row.addWidget(contact_check_v_max_spin)
         form_layout.addRow("接触確認:", contact_check_row)
-        form_layout.addRow(contact_check_button)
+        form_layout.addRow(action_row)
         form_layout.addRow(contact_check_reading_label)
 
         return (
-            enable_checkbox,
+            start_button,
             device_mode_combo,
             v_min_spin,
             v_max_spin,
@@ -549,8 +559,7 @@ class DualChannelTab(QtWidgets.QWidget):
             iteration_spin,
             nplc_spin,
             delay_spin,
-            luminance_group_box,
-            use_bm9_checkbox,
+            compliance_spin,
             sample_name_edit,
             hysteresis_checkbox,
             contact_check_threshold_spin,
@@ -603,7 +612,6 @@ class DualChannelTab(QtWidgets.QWidget):
         )
 
     def _build_channel_config(self, prefix: str) -> ChannelConfig:
-        enable_checkbox = getattr(self, f"dual_{prefix}_enableCheckBox")
         device_mode_combo = getattr(self, f"dual_{prefix}_deviceModeCombo")
         v_min_spin = getattr(self, f"dual_{prefix}_vMinSpin")
         v_max_spin = getattr(self, f"dual_{prefix}_vMaxSpin")
@@ -611,11 +619,12 @@ class DualChannelTab(QtWidgets.QWidget):
         iteration_spin = getattr(self, f"dual_{prefix}_iterationSpin")
         nplc_spin = getattr(self, f"dual_{prefix}_nplcSpin")
         delay_spin = getattr(self, f"dual_{prefix}_delaySpin")
+        compliance_spin = getattr(self, f"dual_{prefix}_complianceSpin")
         sample_name_edit = getattr(self, f"dual_{prefix}_sampleNameEdit")
         hysteresis_checkbox = getattr(self, f"dual_{prefix}_hysteresisCheckBox")
 
         return ChannelConfig(
-            enabled=enable_checkbox.isChecked(),
+            enabled=True,
             device_mode=device_mode_combo.currentText(),
             v_min=v_min_spin.value(),
             v_max=v_max_spin.value(),
@@ -623,6 +632,7 @@ class DualChannelTab(QtWidgets.QWidget):
             iteration=iteration_spin.value(),
             nplc=nplc_spin.value(),
             delay_time=delay_spin.value(),
+            compliance_current=compliance_spin.value(),
             sample_name=sample_name_edit.text().strip() or "sample",
             hysteresis=hysteresis_checkbox.isChecked(),
         )
@@ -639,12 +649,22 @@ class DualChannelTab(QtWidgets.QWidget):
         )
         if not confirm_overwrite(self, [planned_path]):
             return
+        if config.use_luminance:
+            decision = confirm_luminance_use(self, config.bm9_port, config.use_mock)
+            if decision is None:
+                return
+            if not decision:
+                config.use_luminance = False
+                config.bm9_port = None
+                self._append_log_a("BM9を使用せず、電流のみ測定します。")
+        self._active_mode_a_use_luminance = config.use_luminance
         total_points = len(config.build_voltage_list())
         dismiss_completion_alarm()
         set_measurement_completed(self.dual_a_progressBar, False)
         self.dual_a_progressBar.setMaximum(max(total_points, 1))
         self.dual_a_progressBar.setValue(0)
         reverse_from_index = config.forward_point_count() if config.hysteresis else None
+        self._active_forward_point_count_a = reverse_from_index
         if config.use_luminance:
             setup_luminance_axis(self.dual_a_plotWidget)
             self._plot_buffer_a = DualAxisPlotBuffer(
@@ -676,11 +696,30 @@ class DualChannelTab(QtWidgets.QWidget):
                 self.dual_a_contactCheckVMaxSpin.value(),
             )
 
-    def _on_mode_b_start_clicked(self) -> None:
+    def _on_mode_b_channel_button_clicked(self, channel: str) -> None:
+        if self.viewModel.mode_b_is_running() and self._mode_b_reserved_channels[channel]:
+            if not self._mode_b_stopped_channels[channel] and self.viewModel.stop_mode_b_channel(channel):
+                self._mode_b_stopped_channels[channel] = True
+                self._update_mode_b_channel_buttons(True)
+            return
+        self._on_mode_b_start_clicked(channel)
+
+    def _on_mode_b_start_clicked(self, channel: Optional[str] = None) -> None:
+        """指定チャネルのみ、またはA・Bを同時に測定する。"""
+        joining = self.viewModel.mode_b_is_running()
+        if joining and channel is None:
+            return
         if not ensure_save_dir(self, self.dual_b_saveDirEdit):
             return
         chan_a = self._build_channel_config("chA")
         chan_b = self._build_channel_config("chB")
+        chan_a.enabled = channel in (None, "A")
+        chan_b.enabled = channel in (None, "B")
+        try:
+            validate_dual_b_filenames(chan_a, chan_b, self.dual_b_saveDirEdit.text().strip() or ".")
+        except ValueError as exc:
+            self._show_warning_b(str(exc))
+            return
 
         led_channel = None
         if chan_a.enabled and chan_a.device_mode == "発光素子":
@@ -688,11 +727,8 @@ class DualChannelTab(QtWidgets.QWidget):
         elif chan_b.enabled and chan_b.device_mode == "発光素子":
             led_channel = "B"
 
-        bm9_port = None
-        if led_channel == "A" and self.dual_chA_useBm9CheckBox.isChecked():
-            bm9_port = self._dual_b_bm9_port
-        elif led_channel == "B" and self.dual_chB_useBm9CheckBox.isChecked():
-            bm9_port = self._dual_b_bm9_port
+        wants_bm9 = led_channel is not None
+        bm9_port = self._dual_b_bm9_port if wants_bm9 else None
 
         save_dir = self.dual_b_saveDirEdit.text().strip() or "."
         planned_paths = []
@@ -706,6 +742,13 @@ class DualChannelTab(QtWidgets.QWidget):
             )
         if not confirm_overwrite(self, planned_paths):
             return
+        if wants_bm9:
+            decision = confirm_luminance_use(self, bm9_port, self._dual_b_use_mock)
+            if decision is None:
+                return
+            if not decision:
+                bm9_port = None
+                self._append_log_b("BM9を使用せず、電流のみ測定します。")
 
         config = DualBConfig(
             connection=self._dual_b_connection,
@@ -715,6 +758,35 @@ class DualChannelTab(QtWidgets.QWidget):
             bm9_port=bm9_port,
             save_dir=save_dir,
         )
+        if joining:
+            if not self.viewModel.start_mode_b(config):
+                return
+            self._mode_b_reserved_channels[channel] = True
+            self._update_mode_b_channel_buttons(True)
+            selected_channel = chan_a if channel == "A" else chan_b
+            self.dual_b_progressBar.setMaximum(
+                self.dual_b_progressBar.maximum()
+                + len(selected_channel.build_voltage_list())
+            )
+            self._active_forward_point_count_b[channel] = (
+                selected_channel.forward_point_count() if selected_channel.hysteresis else None
+            )
+            selected_plot = self.dual_chA_plotWidget if channel == "A" else self.dual_chB_plotWidget
+            use_luminance = bool(bm9_port)
+            reverse_index = self._active_forward_point_count_b[channel]
+            if use_luminance:
+                setup_luminance_axis(selected_plot)
+                buffer = DualAxisPlotBuffer(selected_plot, reverse_from_index=reverse_index)
+            else:
+                buffer = PlotBuffer(selected_plot, reverse_from_index=reverse_index)
+            if channel == "A":
+                self._plot_buffer_b_cha = buffer
+            else:
+                self._plot_buffer_b_chb = buffer
+            return
+        self._active_mode_b_config = config
+        self._mode_b_reserved_channels = {"A": chan_a.enabled, "B": chan_b.enabled}
+        self._mode_b_stopped_channels = {"A": False, "B": False}
 
         va_len = len(chan_a.build_voltage_list()) if chan_a.enabled else 0
         vb_len = len(chan_b.build_voltage_list()) if chan_b.enabled else 0
@@ -726,15 +798,12 @@ class DualChannelTab(QtWidgets.QWidget):
 
         # review.md指摘#6: 発光素子計測かつBM9使用のチャンネルは輝度も描画する
         # (DualAxisPlotBuffer)。それ以外は電流のみのPlotBuffer。
-        uses_luminance_a = (
-            led_channel == "A" and self.dual_chA_useBm9CheckBox.isChecked() and bm9_port
-        )
-        uses_luminance_b = (
-            led_channel == "B" and self.dual_chB_useBm9CheckBox.isChecked() and bm9_port
-        )
+        uses_luminance_a = led_channel == "A" and bool(bm9_port)
+        uses_luminance_b = led_channel == "B" and bool(bm9_port)
 
         reverse_from_index_a = chan_a.forward_point_count() if chan_a.hysteresis else None
         reverse_from_index_b = chan_b.forward_point_count() if chan_b.hysteresis else None
+        self._active_forward_point_count_b = {"A": reverse_from_index_a, "B": reverse_from_index_b}
 
         if chan_a.enabled and uses_luminance_a:
             setup_luminance_axis(self.dual_chA_plotWidget)
@@ -779,18 +848,16 @@ class DualChannelTab(QtWidgets.QWidget):
         target_channel = "smua" if prefix == "chA" else "smub"
         device_mode_combo = getattr(self, f"dual_{prefix}_deviceModeCombo")
         nplc_spin = getattr(self, f"dual_{prefix}_nplcSpin")
+        compliance_spin = getattr(self, f"dual_{prefix}_complianceSpin")
         threshold_spin = getattr(self, f"dual_{prefix}_contactCheckThresholdSpin")
         v_max_spin = getattr(self, f"dual_{prefix}_contactCheckVMaxSpin")
-        # モードBのChannelConfigにはコンプライアンス電流の入力欄がなく
-        # (既定値0.02を常に使用)、接触確認もそれに合わせる。
-        compliance_current = ChannelConfig().compliance_current
         self._contact_check_active_prefix_b = prefix
         self.viewModel.start_contact_check_b(
             target_channel,
             device_mode_combo.currentText(),
             self._dual_b_connection,
             self._dual_b_use_mock,
-            compliance_current,
+            compliance_spin.value(),
             nplc_spin.value(),
             threshold_spin.value(),
             v_max_spin.value(),
@@ -835,7 +902,10 @@ class DualChannelTab(QtWidgets.QWidget):
         QtWidgets.QMessageBox.warning(self, "入力エラー", message)
 
     def _on_finished_ok_a(self, points: list, csv_path: str, aborted: bool) -> None:
-        self._last_result_a = (points, self.dual_a_deviceModeCombo.currentText())
+        self._last_forward_point_count_a = self._active_forward_point_count_a
+        self._last_result_a = (
+            points, self.dual_a_deviceModeCombo.currentText(), self._active_mode_a_use_luminance
+        )
         set_measurement_completed(self.dual_a_progressBar, not aborted)
         play_completion_sound("aborted" if aborted else "success", self)
 
@@ -855,22 +925,20 @@ class DualChannelTab(QtWidgets.QWidget):
     # ------------------------------------------------------------------
     def _on_running_changed_b(self, running: bool) -> None:
         self.dual_b_startButton.setEnabled(not running)
+        active = self._active_mode_b_config if running else None
+        self._update_mode_b_channel_buttons(running)
         self.dual_b_stopButton.setEnabled(running)
         self.dual_modeSelectCombo.setEnabled(not running)
+        self.dual_b_saveDirEdit.setEnabled(not running)
 
         # チャンネル設定コントロールの制御
         for prefix in ["chA", "chB"]:
-            getattr(self, f"dual_{prefix}_enableCheckBox").setEnabled(not running)
-            getattr(self, f"dual_{prefix}_deviceModeCombo").setEnabled(not running)
-            getattr(self, f"dual_{prefix}_vMinSpin").setEnabled(not running)
-            getattr(self, f"dual_{prefix}_vMaxSpin").setEnabled(not running)
-            getattr(self, f"dual_{prefix}_vStepSpin").setEnabled(not running)
-            getattr(self, f"dual_{prefix}_iterationSpin").setEnabled(not running)
-            getattr(self, f"dual_{prefix}_nplcSpin").setEnabled(not running)
-            getattr(self, f"dual_{prefix}_delaySpin").setEnabled(not running)
-            getattr(self, f"dual_{prefix}_useBm9CheckBox").setEnabled(not running)
-            getattr(self, f"dual_{prefix}_sampleNameEdit").setEnabled(not running)
-            getattr(self, f"dual_{prefix}_hysteresisCheckBox").setEnabled(not running)
+            channel = "A" if prefix == "chA" else "B"
+            editable = not running or bool(active and not self._mode_b_reserved_channels[channel])
+            for field in ("deviceModeCombo", "vMinSpin", "vMaxSpin", "vStepSpin",
+                          "iterationSpin", "nplcSpin", "delaySpin", "complianceSpin",
+                          "sampleNameEdit", "hysteresisCheckBox"):
+                getattr(self, f"dual_{prefix}_{field}").setEnabled(editable)
 
         # running_changed_bは本測定と接触確認(chA/chB共有スロット)の両方から
         # 発火される共有シグナル。接触確認ボタン自体は自身の状態
@@ -878,6 +946,21 @@ class DualChannelTab(QtWidgets.QWidget):
         if not self._contact_check_running_b:
             self.dual_chA_contactCheckButton.setEnabled(not running)
             self.dual_chB_contactCheckButton.setEnabled(not running)
+        if not running:
+            self._active_mode_b_config = None
+            self._mode_b_reserved_channels = {"A": False, "B": False}
+            self._mode_b_stopped_channels = {"A": False, "B": False}
+
+    def _update_mode_b_channel_buttons(self, running: bool) -> None:
+        for channel, button in (("A", self.dual_chA_startButton),
+                                ("B", self.dual_chB_startButton)):
+            reserved = running and self._mode_b_reserved_channels[channel]
+            stopped = reserved and self._mode_b_stopped_channels[channel]
+            button.setText("中断済み" if stopped else "このチャネルを中断" if reserved
+                           else "このチャネルを測定開始")
+            button.setEnabled(not stopped and (
+                reserved or not running or self._active_mode_b_config is not None
+            ))
 
     def _on_progress_changed_b(self, current: int, total: int) -> None:
         self.dual_b_progressBar.setMaximum(max(total, 1))
@@ -914,26 +997,22 @@ class DualChannelTab(QtWidgets.QWidget):
     def _on_finished_ok_b(
         self, points: list, csv_path_a: str, csv_path_b: str, aborted: bool
     ) -> None:
+        self._last_forward_point_count_b = self._active_forward_point_count_b.copy()
         set_measurement_completed(self.dual_b_progressBar, not aborted)
         play_completion_sound("aborted" if aborted else "success", self)
         chan_a_points = [p for p in points if p.channel == "A"]
         chan_b_points = [p for p in points if p.channel == "B"]
 
-        device_mode_a = self.dual_chA_deviceModeCombo.currentText()
-        device_mode_b = self.dual_chB_deviceModeCombo.currentText()
+        active = self._active_mode_b_config
+        device_mode_a = active.channel_a.device_mode if active else self.dual_chA_deviceModeCombo.currentText()
+        device_mode_b = active.channel_b.device_mode if active else self.dual_chB_deviceModeCombo.currentText()
         led_channel = None
-        if self.dual_chA_enableCheckBox.isChecked() and device_mode_a == "発光素子":
+        if active and active.channel_a.enabled and device_mode_a == "発光素子":
             led_channel = "A"
-        elif self.dual_chB_enableCheckBox.isChecked() and device_mode_b == "発光素子":
+        elif active and active.channel_b.enabled and device_mode_b == "発光素子":
             led_channel = "B"
-        use_luminance_a = (
-            led_channel == "A" and self.dual_chA_useBm9CheckBox.isChecked()
-            and bool(self._dual_b_bm9_port)
-        )
-        use_luminance_b = (
-            led_channel == "B" and self.dual_chB_useBm9CheckBox.isChecked()
-            and bool(self._dual_b_bm9_port)
-        )
+        use_luminance_a = led_channel == "A" and bool(active.bm9_port)
+        use_luminance_b = led_channel == "B" and bool(active.bm9_port)
         self._last_result_b = {
             "A": (chan_a_points, device_mode_a, use_luminance_a),
             "B": (chan_b_points, device_mode_b, use_luminance_b),
@@ -956,6 +1035,8 @@ class DualChannelTab(QtWidgets.QWidget):
             self.dual_chB_contactCheckReadingLabel.setText("電流: -")
             self._contact_check_active_prefix_b = None
         self.dual_b_startButton.setEnabled(not running)
+        self.dual_chA_startButton.setEnabled(not running)
+        self.dual_chB_startButton.setEnabled(not running)
 
     def _on_contact_check_reading_b(self, channel: str, voltage: float, current: float) -> None:
         prefix = "chA" if channel == "A" else "chB"
@@ -988,7 +1069,6 @@ class DualChannelTab(QtWidgets.QWidget):
         }
         for prefix in ("chA", "chB"):
             widgets.update({
-                f"dual_{prefix}_enabled": getattr(self, f"dual_{prefix}_enableCheckBox"),
                 f"dual_{prefix}_device_mode": getattr(self, f"dual_{prefix}_deviceModeCombo"),
                 f"dual_{prefix}_v_min": getattr(self, f"dual_{prefix}_vMinSpin"),
                 f"dual_{prefix}_v_max": getattr(self, f"dual_{prefix}_vMaxSpin"),
@@ -996,7 +1076,7 @@ class DualChannelTab(QtWidgets.QWidget):
                 f"dual_{prefix}_iteration": getattr(self, f"dual_{prefix}_iterationSpin"),
                 f"dual_{prefix}_nplc": getattr(self, f"dual_{prefix}_nplcSpin"),
                 f"dual_{prefix}_delay": getattr(self, f"dual_{prefix}_delaySpin"),
-                f"dual_{prefix}_use_bm9": getattr(self, f"dual_{prefix}_useBm9CheckBox"),
+                f"dual_{prefix}_compliance": getattr(self, f"dual_{prefix}_complianceSpin"),
                 f"dual_{prefix}_sample_name": getattr(self, f"dual_{prefix}_sampleNameEdit"),
                 f"dual_{prefix}_hysteresis": getattr(self, f"dual_{prefix}_hysteresisCheckBox"),
                 f"dual_{prefix}_contact_check_threshold": getattr(
@@ -1060,8 +1140,7 @@ class DualChannelTab(QtWidgets.QWidget):
                 parent or self, "情報", "保存できる測定結果がありません。"
             )
             return
-        points, device_mode = self._last_result_a
-        include_luminance = device_mode == "発光素子"
+        points, device_mode, include_luminance = self._last_result_a
         sample_name = self.dual_a_sampleNameEdit.text().strip() or "sample"
         save_dir = self.dual_a_saveDirEdit.text().strip() or "."
         default_path = os.path.join(save_dir, dual_a_csv_filename(sample_name, device_mode))
@@ -1070,7 +1149,7 @@ class DualChannelTab(QtWidgets.QWidget):
         )
         if not path:
             return
-        save_points_csv(points, path, include_luminance)
+        save_points_csv(points, path, include_luminance, self._last_forward_point_count_a)
         self._append_log_a(f"測定データを保存しました: {path}")
 
     def _save_mode_b_result_as(self, parent=None) -> None:
@@ -1094,7 +1173,7 @@ class DualChannelTab(QtWidgets.QWidget):
         )
         if not path:
             return
-        save_points_csv(points, path, use_luminance)
+        save_points_csv(points, path, use_luminance, self._last_forward_point_count_b[channel])
         self._append_log_b(f"測定データを保存しました: {path}")
 
     def _on_browse_mode_a_save_dir(self) -> None:

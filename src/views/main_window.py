@@ -485,6 +485,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_start_button_lock(
             self.dual_channel_tab.dual_b_startButton, dual_b_running, dual_b_locked_by
         )
+        active_b = self.dual_channel_tab._active_mode_b_config if dual_b_running else None
+        for button, channel in (
+            (self.dual_channel_tab.dual_chA_startButton, "A"),
+            (self.dual_channel_tab.dual_chB_startButton, "B"),
+        ):
+            occupied = bool(active_b and self.dual_channel_tab._mode_b_reserved_channels[channel])
+            stopped = self.dual_channel_tab._mode_b_stopped_channels[channel]
+            if dual_b_running and occupied:
+                button.setEnabled(not stopped)
+                button.setToolTip("" if not stopped else "このチャネルは中断済みです")
+            elif dual_b_running and active_b and not dual_a_running:
+                self._apply_start_button_lock(button, False, None)
+            else:
+                self._apply_start_button_lock(button, dual_b_running or occupied, dual_b_locked_by)
 
     @staticmethod
     def _apply_start_button_lock(button, running: bool, locked_reason) -> None:

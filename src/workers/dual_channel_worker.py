@@ -7,9 +7,11 @@
 """
 from __future__ import annotations
 
+import threading
 from typing import Callable, List, Optional
 
 from models.instruments.base import AbstractLuminanceMeter, AbstractSourceMeter
+from models.measurement.config import ChannelConfig
 from qtcompat import QThread, pyqtSignal
 from utils.logger import get_logger
 
@@ -51,10 +53,77 @@ class DualChannelWorker(QThread):
         self._luminance_meter = luminance_meter
         self._csv_save_fn = csv_save_fn
         self._abort_requested = False
+        self._aborted_channels: set[str] = set()
+        self._pending_lock = threading.Lock()
+        self._pending_channel: Optional[tuple[str, ChannelConfig, Optional[AbstractLuminanceMeter]]] = None
+        self._accepting_channels = True
+
+    def request_add_channel(
+        self, channel: str, config: ChannelConfig,
+        luminance_meter: Optional[AbstractLuminanceMeter] = None,
+    ) -> bool:
+        """空きチャンネルの開始要求を測定スレッドへ安全に渡す。"""
+        with self._pending_lock:
+            if (self._abort_requested or channel in self._aborted_channels
+                    or not self._accepting_channels or self._pending_channel is not None):
+                return False
+            self._pending_channel = (channel, config, luminance_meter)
+            self._total_points += len(config.build_voltage_list())
+            return True
+
+    def take_pending_channel(self) -> Optional[tuple[str, ChannelConfig]]:
+        with self._pending_lock:
+            pending = self._pending_channel
+            self._pending_channel = None
+        if pending is None:
+            return None
+        channel, config, meter = pending
+        if meter is not None:
+            try:
+                meter.connect()
+            except Exception:
+                meter.close()
+                raise
+            self._luminance_meter = meter
+        return channel, config
+
+    def get_luminance_meter(self) -> Optional[AbstractLuminanceMeter]:
+        return self._luminance_meter
+
+    def finish_if_no_pending(self) -> bool:
+        """最後の測定点と追加要求の競合を防いで受付を終了する。"""
+        with self._pending_lock:
+            if self._pending_channel is not None:
+                return False
+            self._accepting_channels = False
+            return True
 
     def request_stop(self) -> None:
         """協調的中断フラグを立てる。``QThread.terminate()``は絶対に使わない。"""
-        self._abort_requested = True
+        with self._pending_lock:
+            self._abort_requested = True
+            self._aborted_channels.update(("A", "B"))
+            self._accepting_channels = False
+
+    def request_stop_channel(self, channel: str) -> bool:
+        """指定チャンネルだけを停止し、もう一方の掃引は継続する。"""
+        if channel not in ("A", "B"):
+            return False
+        with self._pending_lock:
+            if (self._abort_requested or not self._accepting_channels
+                    or channel in self._aborted_channels):
+                return False
+            self._aborted_channels.add(channel)
+            return True
+
+    def is_channel_aborted(self, channel: str) -> bool:
+        with self._pending_lock:
+            return channel in self._aborted_channels
+
+    @property
+    def aborted_channels(self) -> frozenset[str]:
+        with self._pending_lock:
+            return frozenset(self._aborted_channels)
 
     def _is_aborted(self) -> bool:
         return self._abort_requested
@@ -83,9 +152,11 @@ class DualChannelWorker(QThread):
             self.error.emit(str(exc))
             return
         finally:
+            with self._pending_lock:
+                self._accepting_channels = False
             self._close_instruments()
 
-        aborted = self._abort_requested
+        aborted = self._abort_requested or bool(self.aborted_channels)
         csv_path_a = ""
         csv_path_b = ""
         if self._csv_save_fn is not None:

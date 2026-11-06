@@ -10,8 +10,8 @@ QSplitterが担う(review.md指摘#1)ため、各タブは``build_settings_colum
 自身のレイアウトを構築し、``build_display_panel()``で表示パネルを、
 ログウィジェットをそのままMainWindowへ渡す(``display_panel()``/``log_widget()``)。
 
-タブ固有のウィジェット(例: JVLの輝度計チェックボックス)は
-``build_measurement_group()`` の ``extra_rows`` フックで差し込む。
+タブ固有のウィジェットは ``build_measurement_group()`` の
+``extra_rows`` で配置する。
 """
 from __future__ import annotations
 
@@ -25,6 +25,37 @@ from views.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinB
 # 桁数の多い値(例: 電圧掃引の -20.000)が見切れる。実測でスピンボックス自身が
 # 必要とする幅は最大71pxのため、その直上の72pxを共通の上限とする。
 _SPIN_MAX_WIDTH = 72
+
+
+def labeled_fields(object_name: str, fields) -> QtWidgets.QGridLayout:
+    """各入力欄の真上にラベルを配置し、狭い設定欄でも対応を明確にする。"""
+    grid = QtWidgets.QGridLayout()
+    grid.setObjectName(object_name)
+    for column, (title, widget) in enumerate(fields):
+        label = QtWidgets.QLabel(title)
+        label.setWordWrap(True)
+        label.setBuddy(widget)
+        grid.addWidget(label, 0, column)
+        grid.addWidget(widget, 1, column)
+        grid.setColumnStretch(column, 1)
+        widget.setAccessibleName(title)
+    return grid
+
+
+def filename_preview(prefix, sample_edit, filename_fn, mode_combo=None):
+    label = QtWidgets.QLabel(objectName=f"{prefix}_filenamePreview")
+    label.setWordWrap(True)
+    label.setTextFormat(enum_value(Qt, "PlainText"))
+    label.setTextInteractionFlags(enum_value(Qt, "TextSelectableByMouse"))
+    def refresh(*_):
+        filename = filename_fn(sample_edit.text().strip() or "sample")
+        label.setText(f"保存名: {filename}")
+        label.setToolTip(filename)
+    sample_edit.textChanged.connect(refresh)
+    if mode_combo is not None:
+        mode_combo.currentTextChanged.connect(refresh)
+    refresh()
+    return label
 
 
 def make_double_spin(
@@ -79,6 +110,7 @@ def build_settings_column(
     container: QtWidgets.QWidget,
     prefix: str,
     settings_groups: List[QtWidgets.QWidget],
+    footer: Optional[QtWidgets.QWidget] = None,
 ) -> QtWidgets.QScrollArea:
     """タブ(またはモードページ)自身のレイアウトとして「設定グループの縦積み
     スクロールエリア」を構築する(review.md指摘#1: 左右分割はメインウィンドウ
@@ -88,6 +120,7 @@ def build_settings_column(
         container: レイアウトを設置するタブ(またはモードページ)ウィジェット。
         prefix: objectName接頭辞(``opv``/``jvl``/``dual_a``/``dual_b``)。
         settings_groups: 上から積む設定グループ群。
+        footer: スクロールせず常時表示する実行操作などのグループ。
 
     Returns:
         構築したQScrollArea。
@@ -118,7 +151,9 @@ def build_settings_column(
     settings_layout.addStretch()
     scroll_area.setWidget(settings_container)
 
-    root_layout.addWidget(scroll_area)
+    root_layout.addWidget(scroll_area, 1)
+    if footer is not None:
+        root_layout.addWidget(footer)
     return scroll_area
 
 
@@ -165,8 +200,7 @@ def build_measurement_group(
         prefix: objectName接頭辞(``opv``/``jvl``)。
         v_min_default/v_max_default/v_step_default: 電圧掃引の初期値。
         sweep_single_step: 開始/終了スピンボックスのステップ量。
-        extra_rows: タブ固有の行(例: JVLの輝度計チェックボックス)を
-            フォームレイアウト末尾へ差し込むフック。
+        extra_rows: タブ固有の行をフォームレイアウト末尾へ差し込むフック。
 
     Returns:
         (QGroupBox, ウィジェット辞書) のタプル。辞書キー:
@@ -186,39 +220,20 @@ def build_measurement_group(
     )
     v_step_spin = make_double_spin(f"{prefix}_vStepSpin", 0.001, 10.0, 3, 0.01, v_step_default)
 
-    sweep_row = QtWidgets.QHBoxLayout()
-    sweep_row.setObjectName(f"{prefix}_sweepRow")
-    sweep_row.addWidget(QtWidgets.QLabel("開始:"))
-    sweep_row.addWidget(v_min_spin)
-    sweep_row.addWidget(QtWidgets.QLabel("終了:"))
-    sweep_row.addWidget(v_max_spin)
-    sweep_row.addWidget(QtWidgets.QLabel("ステップ:"))
-    sweep_row.addWidget(v_step_spin)
-    form_layout.addRow("電圧掃引 (V):", sweep_row)
+    form_layout.addRow(labeled_fields(f"{prefix}_sweepRow", [
+        ("開始 [V]", v_min_spin), ("終了 [V]", v_max_spin), ("ステップ [V]", v_step_spin),
+    ]))
 
-    # 繰り返し回数 / NPLC(1行に統合)
+    # 測定回数・NPLC・遅延・電流上限
     iteration_spin = make_iteration_spin(f"{prefix}_iterationSpin")
     nplc_spin = make_double_spin(f"{prefix}_nplcSpin", 0.01, 10.0, 2, 0.1, 1.0)
-
-    iteration_nplc_row = QtWidgets.QHBoxLayout()
-    iteration_nplc_row.setObjectName(f"{prefix}_iterationNplcRow")
-    iteration_nplc_row.addWidget(QtWidgets.QLabel("繰り返し:"))
-    iteration_nplc_row.addWidget(iteration_spin)
-    iteration_nplc_row.addWidget(QtWidgets.QLabel("NPLC:"))
-    iteration_nplc_row.addWidget(nplc_spin)
-    form_layout.addRow(iteration_nplc_row)
-
-    # 遅延 / コンプライアンス(1行に統合)
     delay_spin = make_double_spin(f"{prefix}_delaySpin", 0.0, 60.0, 2, 0.1, 1.0)
     compliance_spin = make_double_spin(f"{prefix}_complianceSpin", 0.0001, 1.0, 4, 0.001, 0.02)
-
-    delay_compliance_row = QtWidgets.QHBoxLayout()
-    delay_compliance_row.setObjectName(f"{prefix}_delayComplianceRow")
-    delay_compliance_row.addWidget(QtWidgets.QLabel("遅延[s]:"))
-    delay_compliance_row.addWidget(delay_spin)
-    delay_compliance_row.addWidget(QtWidgets.QLabel("コンプライアンス[A]:"))
-    delay_compliance_row.addWidget(compliance_spin)
-    form_layout.addRow(delay_compliance_row)
+    timing_fields = [
+        ("各電圧の回数", iteration_spin), ("NPLC", nplc_spin),
+        ("遅延 [s]", delay_spin), ("電流上限 [A]", compliance_spin),
+    ]
+    form_layout.addRow(labeled_fields(f"{prefix}_timingRow", timing_fields))
 
     # ヒステリシス測定(往復掃引)チェックボックス
     hysteresis_checkbox = QtWidgets.QCheckBox(
@@ -226,7 +241,7 @@ def build_measurement_group(
     )
     form_layout.addRow(hysteresis_checkbox)
 
-    # タブ固有の行の差し込み口(JVLの輝度計チェックボックス等)
+    # タブ固有の追加行
     if extra_rows is not None:
         extra_rows(form_layout)
 
@@ -286,6 +301,10 @@ def build_save_run_group(
         save_form_layout.addRow("保存先:", save_dir_row)
 
     save_run_layout.addLayout(save_form_layout)
+    from models.measurement.csv_writer import jvl_csv_filename, opv_csv_filename
+    save_run_layout.addWidget(filename_preview(
+        prefix, sample_name_edit, opv_csv_filename if prefix == "opv" else jvl_csv_filename
+    ))
 
     # ショートカット(F5/Esc)をボタンのラベルに明記する(review.md項目4)。
     # QSSの `text*="開始"`/`text*="中断"` セレクタは部分一致のため配色は維持される。

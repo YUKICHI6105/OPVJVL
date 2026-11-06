@@ -61,6 +61,8 @@ class DualChannelViewModel(QObject):
         super().__init__(parent)
         self._worker_a: Optional[MeasurementWorker] = None
         self._worker_b: Optional[DualChannelWorker] = None
+        self._active_config_b: Optional[DualBConfig] = None
+        self._mode_b_active = False
         self._contact_worker_a: Optional[MeasurementWorker] = None
         # モードBの物理SMUは1台共有のため、チャンネルA/Bどちらの接触確認でも
         # 同一のスロットを使う(同時に2つ動かせないようにするため)。
@@ -105,6 +107,7 @@ class DualChannelViewModel(QObject):
         )
         csv_save_fn = functools.partial(
             csv_writer.save_dual_a_csv,
+            forward_point_count=config.forward_point_count() if config.hysteresis else None,
             sample_name=config.sample_name,
             save_dir=config.save_dir,
             device_mode=config.device_mode,
@@ -183,18 +186,27 @@ class DualChannelViewModel(QObject):
     # ==================================================================
     # モードB(2素子同時計測)
     # ==================================================================
-    def start_mode_b(self, config: DualBConfig) -> None:
-        if self._worker_b is not None and self._worker_b.isRunning():
-            return  # 二重起動防止(B-7節)
+    def mode_b_is_running(self) -> bool:
+        return self._mode_b_active
+
+    def start_mode_b(self, config: DualBConfig) -> bool:
+        if self._mode_b_active:
+            return self._join_mode_b_channel(config)
         if self._contact_worker_b is not None and self._contact_worker_b.isRunning():
-            return  # 接触確認中は本測定を開始できない(機器共有排他)
+            return False  # 接触確認中は本測定を開始できない(機器共有排他)
 
         chan_a = config.channel_a
         chan_b = config.channel_b
 
+        try:
+            csv_writer.validate_dual_b_filenames(chan_a, chan_b, config.save_dir)
+        except ValueError as exc:
+            self.error_b.emit(str(exc))
+            return False
+
         if not chan_a.enabled and not chan_b.enabled:
             self.error_b.emit("チャンネルA・チャンネルBのうち少なくとも一方を有効にしてください。")
-            return
+            return False
 
         if (
             chan_a.enabled
@@ -206,29 +218,29 @@ class DualChannelViewModel(QObject):
                 "チャンネルA・チャンネルBの両方を「発光素子」モードにすることはできません"
                 "(輝度計は1台のため同時計測できません)。"
             )
-            return
+            return False
 
         if chan_a.enabled:
             if chan_a.v_max <= chan_a.v_min:
                 self.error_b.emit(f"[chA] Vmax({chan_a.v_max})はVmin({chan_a.v_min})より大きい値にしてください。")
-                return
+                return False
             if chan_a.v_step <= 0:
                 self.error_b.emit("[chA] Vstepは0より大きい値にしてください。")
-                return
+                return False
             if chan_a.iteration < 1:
                 self.error_b.emit("[chA] 繰り返し回数は1回以上にしてください。")
-                return
+                return False
 
         if chan_b.enabled:
             if chan_b.v_max <= chan_b.v_min:
                 self.error_b.emit(f"[chB] Vmax({chan_b.v_max})はVmin({chan_b.v_min})より大きい値にしてください。")
-                return
+                return False
             if chan_b.v_step <= 0:
                 self.error_b.emit("[chB] Vstepは0より大きい値にしてください。")
-                return
+                return False
             if chan_b.iteration < 1:
                 self.error_b.emit("[chB] 繰り返し回数は1回以上にしてください。")
-                return
+                return False
 
         led_channel = None
         if chan_a.enabled and chan_a.device_mode == "発光素子":
@@ -255,18 +267,24 @@ class DualChannelViewModel(QObject):
         vb_len = len(chan_b.build_voltage_list()) if chan_b.enabled else 0
         total_points = va_len + vb_len
 
-        make_iterator = functools.partial(
-            run_dual_b_sequence, smu, config, luminance_meter=luminance_meter
-        )
-        csv_save_fn = functools.partial(
-            self._save_mode_b_results,
-            channel_a=chan_a,
-            channel_b=chan_b,
-            save_dir=config.save_dir,
-            connection=config.connection,
-            use_luminance_a=use_luminance_a,
-            use_luminance_b=use_luminance_b,
-        )
+        def make_iterator(is_aborted):
+            return run_dual_b_sequence(
+                smu, config, is_aborted, luminance_meter=luminance_meter,
+                take_pending_channel=worker.take_pending_channel,
+                get_luminance_meter=worker.get_luminance_meter,
+                finish_if_no_pending=worker.finish_if_no_pending,
+                is_channel_aborted=worker.is_channel_aborted,
+            )
+
+        def csv_save_fn(points_a, points_b, aborted):
+            return self._save_mode_b_results(
+                points_a, points_b, aborted, channel_a=config.channel_a,
+                channel_b=config.channel_b, save_dir=config.save_dir,
+                connection=config.connection,
+                use_luminance_a=config.channel_a.device_mode == "発光素子" and bool(config.bm9_port),
+                use_luminance_b=config.channel_b.device_mode == "発光素子" and bool(config.bm9_port),
+                aborted_channels=worker.aborted_channels,
+            )
 
         self.log_appended_b.emit(
             f"{bvm.mock_log_prefix(config.use_mock)}モードB測定を開始します ({config.connection})"
@@ -285,13 +303,66 @@ class DualChannelViewModel(QObject):
         worker.finished_ok.connect(self._on_mode_b_finished_ok)
         worker.error.connect(self._on_mode_b_error)
         self._worker_b = worker
+        self._active_config_b = config
+        self._mode_b_active = True
 
         self.running_changed_b.emit(True)
         worker.start()
+        return True
+
+    def _join_mode_b_channel(self, requested: DualBConfig) -> bool:
+        """同じ測定スレッドへ未使用チャンネルを追加する。SMUは再接続・再初期化しない。"""
+        worker = self._worker_b
+        active = self._active_config_b
+        if worker is None or active is None:
+            return False
+        new_key = "A" if requested.channel_a.enabled and not requested.channel_b.enabled else "B"
+        new_channel = requested.channel_a if new_key == "A" else requested.channel_b
+        current_channel = active.channel_a if new_key == "A" else active.channel_b
+        other_channel = active.channel_b if new_key == "A" else active.channel_a
+        if (requested.channel_a.enabled == requested.channel_b.enabled or current_channel.enabled
+                or requested.connection != active.connection or requested.save_dir != active.save_dir):
+            self.error_b.emit("測定中に追加できるのは、同じ接続・保存先の未測定チャンネルだけです。")
+            return False
+        if other_channel.device_mode == "発光素子" and new_channel.device_mode == "発光素子":
+            self.error_b.emit("発光素子を両チャンネルで同時測定できません。")
+            return False
+        if new_channel.v_max <= new_channel.v_min or new_channel.v_step <= 0 or new_channel.iteration < 1:
+            self.error_b.emit(f"チャンネル{new_key}の掃引条件を確認してください。")
+            return False
+        merged_a = new_channel if new_key == "A" else active.channel_a
+        merged_b = new_channel if new_key == "B" else active.channel_b
+        try:
+            csv_writer.validate_dual_b_filenames(merged_a, merged_b, active.save_dir)
+        except ValueError as exc:
+            self.error_b.emit(str(exc))
+            return False
+        meter = None
+        if requested.bm9_port and not active.bm9_port:
+            meter = registry.create_luminance_meter(requested.bm9_port, use_mock=requested.use_mock)
+        if not worker.request_add_channel(new_key, new_channel, meter):
+            self.error_b.emit("測定終了直前のためチャンネルを追加できませんでした。")
+            return False
+        if requested.bm9_port:
+            active.bm9_port = requested.bm9_port
+        self.log_appended_b.emit(f"チャンネル{new_key}の測定を途中から開始します。")
+        return True
 
     def stop_mode_b(self) -> None:
         if self._worker_b is not None:
             self._worker_b.request_stop()
+
+    def stop_mode_b_channel(self, channel: str) -> bool:
+        """モードBの指定チャンネルのみを中断する。"""
+        worker = self._worker_b
+        config = self._active_config_b
+        if worker is None or config is None or channel not in ("A", "B"):
+            return False
+        selected = config.channel_a if channel == "A" else config.channel_b
+        if not selected.enabled or not worker.request_stop_channel(channel):
+            return False
+        self.log_appended_b.emit(f"チャンネル{channel}の測定を中断します。")
+        return True
 
     def stop_and_wait_b(self, timeout_ms: int = 3000) -> None:
         """アプリ終了時(MainWindow.closeEvent)専用の同期的停止API(review.md項目3)。
@@ -316,12 +387,15 @@ class DualChannelViewModel(QObject):
         connection: str,
         use_luminance_a: bool,
         use_luminance_b: bool,
+        aborted_channels: frozenset[str] = frozenset(),
     ) -> tuple[str, str]:
+        csv_writer.validate_dual_b_filenames(channel_a, channel_b, save_dir)
         path_a = ""
         path_b = ""
         if channel_a.enabled:
             path_a = csv_writer.save_dual_b_channel_csv(
                 points_a,
+                forward_point_count=channel_a.forward_point_count() if channel_a.hysteresis else None,
                 sample_name=channel_a.sample_name,
                 save_dir=save_dir,
                 channel="A",
@@ -331,6 +405,7 @@ class DualChannelViewModel(QObject):
         if channel_b.enabled:
             path_b = csv_writer.save_dual_b_channel_csv(
                 points_b,
+                forward_point_count=channel_b.forward_point_count() if channel_b.hysteresis else None,
                 sample_name=channel_b.sample_name,
                 save_dir=save_dir,
                 channel="B",
@@ -347,8 +422,10 @@ class DualChannelViewModel(QObject):
                 "connection": connection,
                 # ユーザー操作による中断で終了した測定かどうか(解析時の判断材料)
                 "aborted": aborted,
-                "channel_a": self._channel_meta(channel_a),
-                "channel_b": self._channel_meta(channel_b),
+                "channel_a": {**self._channel_meta(channel_a), "csv_path": path_a,
+                              "aborted": channel_a.enabled and "A" in aborted_channels},
+                "channel_b": {**self._channel_meta(channel_b), "csv_path": path_b,
+                              "aborted": channel_b.enabled and "B" in aborted_channels},
             },
         )
         return path_a, path_b
@@ -364,7 +441,10 @@ class DualChannelViewModel(QObject):
             "iteration": channel.iteration,
             "nplc": channel.nplc,
             "delay_time": channel.delay_time,
+            "compliance_current": channel.compliance_current,
             "sample_name": channel.sample_name,
+            "hysteresis": channel.hysteresis,
+            "forward_point_count": channel.forward_point_count() if channel.enabled else 0,
         }
 
     @staticmethod
@@ -412,8 +492,10 @@ class DualChannelViewModel(QObject):
         self._reset_mode_b_running_state()
 
     def _reset_mode_b_running_state(self) -> None:
+        self._mode_b_active = False
         self.running_changed_b.emit(False)
         self._worker_b = None
+        self._active_config_b = None
 
     # ==================================================================
     # 接触確認 モードA(smua固定。device_modeに応じてhold/ramp自動切替)

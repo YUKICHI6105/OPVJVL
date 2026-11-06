@@ -7,6 +7,79 @@ from viewmodels.dual_channel_viewmodel import DualChannelViewModel
 from views.dual_channel_tab import DualChannelTab
 
 
+def test_duplicate_filenames_rejected_before_instrument_creation(qtbot, tmp_path, monkeypatch):
+    from models.measurement.config import ChannelConfig, DualBConfig
+    from viewmodels import dual_channel_viewmodel
+
+    vm = DualChannelViewModel()
+    errors = []
+    vm.error_b.connect(errors.append)
+    def unexpected_creation(*args, **kwargs):
+        pytest.fail("重複保存先の場合に機器を作成してはいけない")
+    monkeypatch.setattr(dual_channel_viewmodel.registry, "create_source_meter", unexpected_creation)
+    vm.start_mode_b(DualBConfig(
+        channel_a=ChannelConfig(sample_name="Sample"),
+        channel_b=ChannelConfig(sample_name="sample"), save_dir=str(tmp_path),
+    ))
+    assert len(errors) == 1
+
+
+def test_dual_results_use_single_measurement_names_and_keep_channel_mapping(tmp_path):
+    import json
+    from models.measurement.config import ChannelConfig
+    from models.measurement.result import ChannelPoint
+
+    vm = DualChannelViewModel()
+    a = ChannelConfig(sample_name="device_01", hysteresis=True)
+    b = ChannelConfig(sample_name="device_02")
+    point_a = ChannelPoint(channel="A", index=0, voltage=0, current=0.001)
+    point_b = ChannelPoint(channel="B", index=0, voltage=0, current=0.002)
+    paths = vm._save_mode_b_results([point_a], [point_b], False, a, b, str(tmp_path), "mock", False, False)
+    assert paths == (str(tmp_path / "device_01_OPV_measurement_data.csv"),
+                     str(tmp_path / "device_02_OPV_measurement_data.csv"))
+    assert "0.001" in (tmp_path / "device_01_OPV_measurement_data.csv").read_text()
+    assert "0.002" in (tmp_path / "device_02_OPV_measurement_data.csv").read_text()
+    meta = json.loads((tmp_path / "device_01_device_02_dualB_meta.json").read_text(encoding="utf-8"))
+    assert meta["channel_a"]["csv_path"] == paths[0]
+    assert meta["channel_b"]["csv_path"] == paths[1]
+    assert meta["channel_a"]["hysteresis"] is True
+
+
+def test_dual_results_record_only_the_stopped_channel(tmp_path):
+    import json
+    from models.measurement.config import ChannelConfig
+    from models.measurement.result import ChannelPoint
+
+    vm = DualChannelViewModel()
+    a = ChannelConfig(sample_name="a")
+    b = ChannelConfig(sample_name="b")
+    points_a = [ChannelPoint(channel="A", index=0, voltage=0, current=0.001)]
+    points_b = [ChannelPoint(channel="B", index=i, voltage=i, current=0.002)
+                for i in range(2)]
+    vm._save_mode_b_results(points_a, points_b, True, a, b, str(tmp_path),
+                            "mock", False, False, frozenset({"A"}))
+    meta = json.loads((tmp_path / "a_b_dualB_meta.json").read_text(encoding="utf-8"))
+    assert meta["channel_a"]["aborted"] is True
+    assert meta["channel_b"]["aborted"] is False
+    assert meta["aborted"] is True
+
+
+def test_mode_b_channel_button_switches_to_stop(qtbot, monkeypatch):
+    tab = DualChannelTab()
+    qtbot.addWidget(tab)
+    stopped = []
+    monkeypatch.setattr(tab.viewModel, "mode_b_is_running", lambda: True)
+    monkeypatch.setattr(tab.viewModel, "stop_mode_b_channel",
+                        lambda channel: stopped.append(channel) or True)
+    tab._mode_b_reserved_channels["A"] = True
+    tab._on_running_changed_b(True)
+    assert tab.dual_chA_startButton.text() == "このチャネルを中断"
+    tab._on_mode_b_channel_button_clicked("A")
+    assert stopped == ["A"]
+    assert tab.dual_chA_startButton.text() == "中断済み"
+    assert not tab.dual_chA_startButton.isEnabled()
+
+
 def test_dual_channel_viewmodel_init(qtbot):
     """初期状態の検証。"""
     tab = DualChannelTab()
