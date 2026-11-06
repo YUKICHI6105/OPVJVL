@@ -762,7 +762,7 @@ class DualChannelTab(QtWidgets.QWidget):
             if not self.viewModel.start_mode_b(config):
                 return
             self._mode_b_reserved_channels[channel] = True
-            self._update_mode_b_channel_buttons(True)
+            self._on_running_changed_b(True)
             selected_channel = chan_a if channel == "A" else chan_b
             self.dual_b_progressBar.setMaximum(
                 self.dual_b_progressBar.maximum()
@@ -844,6 +844,9 @@ class DualChannelTab(QtWidgets.QWidget):
             return
         if self._contact_check_active_prefix_b is not None:
             return  # 他方のチャンネルが接触確認中(同一スロットのため多重起動しない)
+        channel = "A" if prefix == "chA" else "B"
+        if self.viewModel.mode_b_is_running() and self._mode_b_reserved_channels[channel]:
+            return
 
         target_channel = "smua" if prefix == "chA" else "smub"
         device_mode_combo = getattr(self, f"dual_{prefix}_deviceModeCombo")
@@ -943,9 +946,11 @@ class DualChannelTab(QtWidgets.QWidget):
         # running_changed_bは本測定と接触確認(chA/chB共有スロット)の両方から
         # 発火される共有シグナル。接触確認ボタン自体は自身の状態
         # (_contact_check_running_b)でのみ制御する。
-        if not self._contact_check_running_b:
-            self.dual_chA_contactCheckButton.setEnabled(not running)
-            self.dual_chB_contactCheckButton.setEnabled(not running)
+        for channel, prefix in (("A", "chA"), ("B", "chB")):
+            button = getattr(self, f"dual_{prefix}_contactCheckButton")
+            checking = self._contact_check_active_prefix_b == prefix and self._contact_check_running_b
+            idle = bool(active and not self._mode_b_reserved_channels[channel])
+            button.setEnabled(checking or (not self._contact_check_running_b and (not running or idle)))
         if not running:
             self._active_mode_b_config = None
             self._mode_b_reserved_channels = {"A": False, "B": False}
@@ -960,7 +965,12 @@ class DualChannelTab(QtWidgets.QWidget):
                            else "このチャネルを測定開始")
             button.setEnabled(not stopped and (
                 reserved or not running or self._active_mode_b_config is not None
-            ))
+            ) and not (self._contact_check_running_b
+                       and self._contact_check_active_prefix_b == f"ch{channel}"))
+            # textに対応する開始色・中断色を、ラベル切替の直後に再適用する。
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.update()
 
     def _on_progress_changed_b(self, current: int, total: int) -> None:
         self.dual_b_progressBar.setMaximum(max(total, 1))
@@ -1034,9 +1044,12 @@ class DualChannelTab(QtWidgets.QWidget):
             self.dual_chA_contactCheckReadingLabel.setText("電流: -")
             self.dual_chB_contactCheckReadingLabel.setText("電流: -")
             self._contact_check_active_prefix_b = None
-        self.dual_b_startButton.setEnabled(not running)
-        self.dual_chA_startButton.setEnabled(not running)
-        self.dual_chB_startButton.setEnabled(not running)
+        if self.viewModel.mode_b_is_running():
+            self._on_running_changed_b(True)
+        else:
+            self.dual_b_startButton.setEnabled(not running)
+            self.dual_chA_startButton.setEnabled(not running)
+            self.dual_chB_startButton.setEnabled(not running)
 
     def _on_contact_check_reading_b(self, channel: str, voltage: float, current: float) -> None:
         prefix = "chA" if channel == "A" else "chB"

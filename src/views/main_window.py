@@ -415,6 +415,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dual_channel_tab.viewModel.running_changed_b.connect(
             lambda running: self._on_any_running_changed("dual_b", running)
         )
+        for signal in (self.opv_tab.viewModel.contact_check_running_changed,
+                       self.jvl_tab.viewModel.contact_check_running_changed,
+                       self.dual_channel_tab.viewModel.contact_check_running_changed_a,
+                       self.dual_channel_tab.viewModel.contact_check_running_changed_b):
+            signal.connect(lambda _running: self._update_start_button_locks())
         self._update_start_button_locks()
 
     def _on_any_running_changed(self, key: str, running: bool) -> None:
@@ -479,12 +484,30 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._apply_start_button_lock(self.opv_tab.opv_startButton, opv_running, opv_locked_by)
         self._apply_start_button_lock(self.jvl_tab.jvl_startButton, jvl_running, jvl_locked_by)
+        self.opv_tab.opv_contactCheckButton.setEnabled(
+            opv_locked_by is None and (not opv_running or self.opv_tab._contact_check_running)
+        )
+        self.jvl_tab.jvl_contactCheckButton.setEnabled(
+            jvl_locked_by is None and (not jvl_running or self.jvl_tab._contact_check_running)
+        )
         self._apply_start_button_lock(
             self.dual_channel_tab.dual_a_startButton, dual_a_running, dual_a_locked_by
         )
         self._apply_start_button_lock(
             self.dual_channel_tab.dual_b_startButton, dual_b_running, dual_b_locked_by
         )
+        self.dual_channel_tab.dual_a_contactCheckButton.setEnabled(
+            dual_a_locked_by is None and (not dual_a_running or
+                                         self.dual_channel_tab._contact_check_running_a)
+        )
+        for channel, prefix in (("A", "chA"), ("B", "chB")):
+            tab = self.dual_channel_tab
+            checking = tab._contact_check_running_b and tab._contact_check_active_prefix_b == prefix
+            idle = bool(tab._active_mode_b_config and not tab._mode_b_reserved_channels[channel])
+            getattr(tab, f"dual_{prefix}_contactCheckButton").setEnabled(
+                dual_b_locked_by is None and (checking or (not tab._contact_check_running_b
+                                                          and (not dual_b_running or idle)))
+            )
         active_b = self.dual_channel_tab._active_mode_b_config if dual_b_running else None
         for button, channel in (
             (self.dual_channel_tab.dual_chA_startButton, "A"),
@@ -496,7 +519,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 button.setEnabled(not stopped)
                 button.setToolTip("" if not stopped else "このチャネルは中断済みです")
             elif dual_b_running and active_b and not dual_a_running:
-                self._apply_start_button_lock(button, False, None)
+                checking = (self.dual_channel_tab._contact_check_running_b and
+                            self.dual_channel_tab._contact_check_active_prefix_b == f"ch{channel}")
+                button.setEnabled(not checking)
+                button.setToolTip("")
             else:
                 self._apply_start_button_lock(button, dual_b_running or occupied, dual_b_locked_by)
 

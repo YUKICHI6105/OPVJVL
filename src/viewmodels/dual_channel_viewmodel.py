@@ -68,6 +68,7 @@ class DualChannelViewModel(QObject):
         # 同一のスロットを使う(同時に2つ動かせないようにするため)。
         self._contact_worker_b: Optional[MeasurementWorker] = None
         self._contact_check_channel_b: Optional[str] = None
+        self._shared_contact_check_b = False
 
     # ==================================================================
     # モードA(2ch低ノイズ計測)
@@ -274,6 +275,7 @@ class DualChannelViewModel(QObject):
                 get_luminance_meter=worker.get_luminance_meter,
                 finish_if_no_pending=worker.finish_if_no_pending,
                 is_channel_aborted=worker.is_channel_aborted,
+                service_contact_check=worker.service_contact_check,
             )
 
         def csv_save_fn(points_a, points_b, aborted):
@@ -298,6 +300,10 @@ class DualChannelViewModel(QObject):
             csv_save_fn=csv_save_fn,
         )
         worker.point_measured_a.connect(self._on_mode_b_point_measured_a)
+        worker.reserve_measurement_channels({key for key, chan in (("A", chan_a), ("B", chan_b))
+                                             if chan.enabled})
+        worker.contact_check_reading.connect(self.contact_check_reading_b.emit)
+        worker.contact_check_finished.connect(self._on_shared_contact_check_finished)
         worker.point_measured_b.connect(self._on_mode_b_point_measured_b)
         worker.progress.connect(self._on_mode_b_progress)
         worker.finished_ok.connect(self._on_mode_b_finished_ok)
@@ -577,8 +583,21 @@ class DualChannelViewModel(QObject):
         threshold_current: float,
         v_max: float,
     ) -> None:
-        if self._worker_b is not None and self._worker_b.isRunning():
-            return  # 本測定と排他(B-7節)
+        if self._mode_b_active and self._worker_b is not None:
+            channel = "A" if target_channel == "smua" else "B"
+            config = self._active_config_b
+            if (self._shared_contact_check_b or config is None
+                    or connection != config.connection or use_mock != config.use_mock):
+                return
+            if not self._worker_b.request_contact_check(
+                channel, device_mode, compliance_current, nplc, threshold_current, v_max,
+            ):
+                self.contact_check_running_changed_b.emit(False)
+                return
+            self._shared_contact_check_b = True
+            self._contact_check_channel_b = channel
+            self.contact_check_running_changed_b.emit(True)
+            return
         if self._contact_worker_b is not None and self._contact_worker_b.isRunning():
             return  # 二重起動防止(chA/chBどちらの接触確認も同一スロット)
 
@@ -614,8 +633,17 @@ class DualChannelViewModel(QObject):
         worker.start()
 
     def stop_contact_check_b(self) -> None:
+        if self._shared_contact_check_b and self._worker_b is not None:
+            self._worker_b.request_stop_contact_check()
+            return
         if self._contact_worker_b is not None:
             self._contact_worker_b.request_stop()
+
+    def _on_shared_contact_check_finished(self) -> None:
+        if self._shared_contact_check_b:
+            self._shared_contact_check_b = False
+            self._contact_check_channel_b = None
+            self.contact_check_running_changed_b.emit(False)
 
     def _on_contact_check_b_point(self, point) -> None:
         channel = self._contact_check_channel_b or "A"

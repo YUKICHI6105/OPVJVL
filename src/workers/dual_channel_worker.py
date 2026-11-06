@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Callable, List, Optional
 
 from models.instruments.base import AbstractLuminanceMeter, AbstractSourceMeter
@@ -36,6 +37,8 @@ class DualChannelWorker(QThread):
     progress = pyqtSignal(int, int)
     finished_ok = pyqtSignal(list, str, str, bool)  # points, csv_a, csv_b, aborted
     error = pyqtSignal(str)
+    contact_check_reading = pyqtSignal(str, float, float)
+    contact_check_finished = pyqtSignal()
 
     def __init__(
         self,
@@ -57,6 +60,75 @@ class DualChannelWorker(QThread):
         self._pending_lock = threading.Lock()
         self._pending_channel: Optional[tuple[str, ChannelConfig, Optional[AbstractLuminanceMeter]]] = None
         self._accepting_channels = True
+        self._measurement_channels: set[str] = set()
+        self._contact_request = None
+        self._contact_state = None
+        self._contact_stop_requested = False
+
+    def reserve_measurement_channels(self, channels: set[str]) -> None:
+        self._measurement_channels.update(channels)
+
+    def request_contact_check(self, channel, device_mode, compliance, nplc, threshold, v_max) -> bool:
+        with self._pending_lock:
+            if (not self._accepting_channels or self._abort_requested
+                    or channel in self._measurement_channels or self._contact_request is not None):
+                return False
+            self._contact_request = (channel, device_mode, compliance, nplc, threshold, v_max)
+            self._contact_stop_requested = False
+            return True
+
+    def request_stop_contact_check(self) -> None:
+        with self._pending_lock:
+            self._contact_stop_requested = True
+
+    def _finish_contact_check(self) -> None:
+        if self._contact_state is not None:
+            self._smu.set_output(self._contact_state["source"], False)
+        with self._pending_lock:
+            existed = self._contact_request is not None
+            self._contact_request = None
+            self._contact_state = None
+            self._contact_stop_requested = False
+        if existed:
+            self.contact_check_finished.emit()
+
+    def service_contact_check(self) -> None:
+        """測定スレッド内で空きチャネルを処理する。SMU全体のresetは行わない。"""
+        with self._pending_lock:
+            request = self._contact_request
+            stop = self._contact_stop_requested
+        if request is None:
+            return
+        if stop:
+            self._finish_contact_check()
+            return
+        channel, mode, compliance, nplc, threshold, v_max = request
+        source = "smua" if channel == "A" else "smub"
+        now = time.monotonic()
+        if self._contact_state is None:
+            self._smu.configure_source_voltage(source, compliance, nplc)
+            self._smu.set_voltage(source, 0.0)
+            self._smu.set_output(source, True)
+            self._contact_state = {"source": source, "voltage": 0.0,
+                                   "due": time.monotonic() + 0.05, "holding": mode != "発光素子"}
+            return
+        state = self._contact_state
+        if now < state["due"]:
+            return
+        current = self._smu.measure_current(source)
+        self.contact_check_reading.emit(channel, state["voltage"], current)
+        if not state["holding"] and abs(current) >= threshold:
+            state["holding"] = True
+        if state["holding"]:
+            state["due"] = time.monotonic() + 0.2
+        else:
+            voltage = round(state["voltage"] + 0.05, 10)
+            if voltage > v_max:
+                self._finish_contact_check()
+                return
+            state["voltage"] = voltage
+            self._smu.set_voltage(source, voltage)
+            state["due"] = time.monotonic() + 0.05
 
     def request_add_channel(
         self, channel: str, config: ChannelConfig,
@@ -65,8 +137,10 @@ class DualChannelWorker(QThread):
         """空きチャンネルの開始要求を測定スレッドへ安全に渡す。"""
         with self._pending_lock:
             if (self._abort_requested or channel in self._aborted_channels
-                    or not self._accepting_channels or self._pending_channel is not None):
+                    or not self._accepting_channels or self._pending_channel is not None
+                    or (self._contact_request is not None and self._contact_request[0] == channel)):
                 return False
+            self._measurement_channels.add(channel)
             self._pending_channel = (channel, config, luminance_meter)
             self._total_points += len(config.build_voltage_list())
             return True
@@ -154,7 +228,10 @@ class DualChannelWorker(QThread):
         finally:
             with self._pending_lock:
                 self._accepting_channels = False
-            self._close_instruments()
+            try:
+                self._finish_contact_check()
+            finally:
+                self._close_instruments()
 
         aborted = self._abort_requested or bool(self.aborted_channels)
         csv_path_a = ""

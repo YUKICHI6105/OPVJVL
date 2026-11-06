@@ -17,6 +17,29 @@ def _buttons(window):
     )
 
 
+def test_jvl_contact_check_locks_opv_start_and_contact_buttons(qtbot, monkeypatch, tmp_path):
+    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    window = MainWindow()
+    qtbot.addWidget(window)
+    vm = window.jvl_tab.viewModel
+    try:
+        vm.start_contact_check("keithley2400", "mock", "smua", True, 0.02, 1, 0.001, 5)
+        assert not window.opv_tab.opv_startButton.isEnabled()
+        assert not window.opv_tab.opv_contactCheckButton.isEnabled()
+        assert window.jvl_tab.jvl_contactCheckButton.isEnabled()
+        # 他タブの状態通知でも共有機器のロックを解除しない。
+        window.opv_tab.viewModel.contact_check_running_changed.emit(False)
+        assert not window.opv_tab.opv_startButton.isEnabled()
+        assert not window.opv_tab.opv_contactCheckButton.isEnabled()
+    finally:
+        worker = vm._contact_worker
+        vm.stop_contact_check()
+        if worker is not None:
+            worker.wait(3000)
+        qtbot.waitUntil(lambda: not window._running_flags["jvl"], timeout=5000)
+        window.close()
+
+
 def test_channel_start_buttons_share_mode_b_lock(qtbot, monkeypatch, tmp_path):
     from models.measurement.config import ChannelConfig, DualBConfig
     monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))

@@ -246,6 +246,7 @@ def run_dual_b_sequence(
     get_luminance_meter: Optional[Callable[[], Optional[AbstractLuminanceMeter]]] = None,
     finish_if_no_pending: Optional[Callable[[], bool]] = None,
     is_channel_aborted: Optional[Callable[[str], bool]] = None,
+    service_contact_check: Optional[Callable[[], None]] = None,
 ) -> Iterator[ChannelPoint]:
     """モードB(2素子同時計測)のロックステップ制御シーケンス。B-4-4節。
 
@@ -258,7 +259,7 @@ def run_dual_b_sequence(
         yield from _run_dual_b_joinable_sequence(
             smu, config, is_aborted, sleep_fn, luminance_meter,
             take_pending_channel, get_luminance_meter,
-            finish_if_no_pending, is_channel_aborted,
+            finish_if_no_pending, is_channel_aborted, service_contact_check,
         )
         return
 
@@ -352,6 +353,7 @@ def _run_dual_b_joinable_sequence(
     get_luminance_meter: Optional[Callable[[], Optional[AbstractLuminanceMeter]]],
     finish_if_no_pending: Optional[Callable[[], bool]],
     is_channel_aborted: Optional[Callable[[str], bool]],
+    service_contact_check: Optional[Callable[[], None]],
 ) -> Iterator[ChannelPoint]:
     """同じSMUを保持したまま、空きチャンネルを次の掃引点から追加する。"""
     channels = {"A": config.channel_a, "B": config.channel_b}
@@ -362,6 +364,11 @@ def _run_dual_b_joinable_sequence(
     }
     positions = {"A": 0, "B": 0}
     stopped = set()
+
+    def sleep_and_service(seconds: float) -> None:
+        if service_contact_check is not None:
+            service_contact_check()
+        sleep_fn(seconds)
 
     def stop_requested_channels() -> None:
         if is_channel_aborted is None:
@@ -386,6 +393,8 @@ def _run_dual_b_joinable_sequence(
             smu.set_output(source_names[key], True)
     try:
         while not is_aborted():
+            if service_contact_check is not None:
+                service_contact_check()
             pending = take_pending_channel()
             if pending is not None:
                 if is_aborted():
@@ -422,7 +431,7 @@ def _run_dual_b_joinable_sequence(
             _interruptible_sleep(
                 max(channel.delay_time for key, channel in channels.items()
                     if channel.enabled and key not in stopped),
-                sleep_fn, lambda: is_aborted() or stop_is_pending(),
+                sleep_and_service, lambda: is_aborted() or stop_is_pending(),
             )
             if is_aborted():
                 break

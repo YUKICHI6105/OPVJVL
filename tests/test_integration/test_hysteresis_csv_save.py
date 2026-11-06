@@ -15,6 +15,7 @@ def mode_b_tab(qtbot):
     tab = DualChannelTab()
     qtbot.addWidget(tab)
     yield tab
+    tab.viewModel.stop_and_wait_b()
     for plot in tab.plot_widgets():
         cleanup_luminance_axis(plot)
     tab.close()
@@ -22,6 +23,49 @@ def mode_b_tab(qtbot):
     app = QtWidgets.QApplication.instance()
     for _ in range(3):
         app.processEvents()
+
+
+@pytest.mark.parametrize("measured", ["A", "B"])
+@pytest.mark.parametrize("contact_mode", ["太陽電池", "発光素子"])
+def test_idle_channel_contact_check_shares_measurement_connection(
+    measured, contact_mode, qtbot, tmp_path, monkeypatch, mode_b_tab,
+):
+    tab = mode_b_tab
+    idle = "B" if measured == "A" else "A"
+    monkeypatch.setattr("views.dual_channel_tab.play_completion_sound", lambda *args: None)
+    tab.apply_device_settings_mode_b("mock", "", True)
+    tab.dual_modeSelectCombo.setCurrentIndex(1)
+    tab.dual_b_saveDirEdit.setText(str(tmp_path))
+    for key in ("A", "B"):
+        getattr(tab, f"dual_ch{key}_sampleNameEdit").setText(key)
+        for field, value in (("vMinSpin", 0), ("vMaxSpin", 0.9), ("vStepSpin", 0.1),
+                             ("iterationSpin", 1), ("delaySpin", 0.1)):
+            getattr(tab, f"dual_ch{key}_{field}").setValue(value)
+    getattr(tab, f"dual_ch{idle}_deviceModeCombo").setCurrentText(contact_mode)
+    readings = []
+    tab.viewModel.contact_check_reading_b.connect(lambda *args: readings.append(args))
+    measured_signal = (tab.viewModel.point_measured_b_cha if measured == "A"
+                       else tab.viewModel.point_measured_b_chb)
+    with qtbot.waitSignal(measured_signal, timeout=10000):
+        getattr(tab, f"dual_ch{measured}_startButton").click()
+    worker = tab.viewModel._worker_b
+    contact_button = getattr(tab, f"dual_ch{idle}_contactCheckButton")
+    assert contact_button.isEnabled()
+    assert not getattr(tab, f"dual_ch{measured}_contactCheckButton").isEnabled()
+    contact_button.click()
+    qtbot.waitUntil(lambda: bool(readings), timeout=5000)
+    assert all(reading[0] == idle for reading in readings)
+    assert not getattr(tab, f"dual_ch{idle}_startButton").isEnabled()
+    assert getattr(tab, f"dual_ch{measured}_startButton").isEnabled()
+    with qtbot.waitSignal(tab.viewModel.contact_check_running_changed_b, timeout=5000):
+        contact_button.click()
+    with qtbot.waitSignal(tab.viewModel.finished_ok_b, timeout=10000) as result:
+        pass
+    assert len(result.args[0]) == 10
+    assert all(point.channel == measured for point in result.args[0])
+    assert not result.args[3]
+    assert worker._smu.reset_calls == 1
+    assert worker._smu.connect_calls == 1
 
 
 def directions(path):
