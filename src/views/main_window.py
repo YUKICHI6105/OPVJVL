@@ -135,12 +135,27 @@ class MainWindow(QtWidgets.QMainWindow):
         終了処理(設定保存)を進める。
         """
         self._stop_running_measurements()
+        self._close_data_viewers()
         try:
             persistence.save_settings(self._collect_measurement_settings())
             logger.info("測定パラメータをsettings.jsonへ保存しました。")
         except Exception as e:  # noqa: BLE001 - 保存失敗で終了を妨げない
             logger.error("終了時の設定保存に失敗しました: %s", e)
         super().closeEvent(event)
+
+    def _close_data_viewers(self) -> None:
+        """開いたままのデータビューアを閉じる。
+
+        ビューアは親を持たない独立ウィンドウ(メインウィンドウの手前に固定
+        されないようにするため)なので、メインウィンドウを閉じても自動では
+        破棄されない。閉じずに残すとアプリのウィンドウが残り続けて終了しない。
+        """
+        for dialog in list(self._data_viewer_dialogs):
+            try:
+                dialog.close()
+            except RuntimeError:  # 既に破棄済みのウィンドウは無視する
+                pass
+        self._data_viewer_dialogs.clear()
 
     def _stop_running_measurements(self) -> None:
         """実行中の全測定(OPV/JVL/2chモードA/B)へ中断要求を出し、停止を待つ。
@@ -618,26 +633,42 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_menu_open_data(self) -> None:
         """ファイルメニュー/Ctrl+Oから測定CSVを開き、専用ビューアで表示する(review.md項目5)。
 
-        パース結果が0点の場合はビューアを開かずエラーダイアログを表示する。
+        ファイルは複数選択でき、選んだぶんを1つのビューアへ重ね描きして
+        比較できる。パース結果が0点のファイルは開く対象から除外し、まとめて
+        エラーダイアログで知らせる(有効なファイルが1つも無ければ開かない)。
         開いたダイアログは``self._data_viewer_dialogs``で参照保持し(GC防止)、
         複数同時に開けるようにする。
         """
-        path, _filter = QtWidgets.QFileDialog.getOpenFileName(
+        paths, _filter = QtWidgets.QFileDialog.getOpenFileNames(
             self, "データを開く", "", "CSV Files (*.csv);;All Files (*)"
         )
-        if not path:
+        if not paths:
             return
 
-        voltages, _currents, _luminances = parse_measurement_csv(path)
-        if not voltages:
+        valid_paths = []
+        invalid_paths = []
+        for path in paths:
+            voltages, _currents, _luminances = parse_measurement_csv(path)
+            if voltages:
+                valid_paths.append(path)
+            else:
+                invalid_paths.append(path)
+
+        if invalid_paths:
             QtWidgets.QMessageBox.warning(
                 self,
                 "エラー",
-                f"CSVファイルから有効な測定データを読み込めませんでした。\nパス: {path}",
+                "CSVファイルから有効な測定データを読み込めませんでした。\n"
+                + "\n".join(invalid_paths),
             )
+        if not valid_paths:
             return
 
-        dialog = DataViewerDialog(path, self)
+        # 親を渡さない(独立ウィンドウにする)。親を持つウィンドウはウィンドウ
+        # マネージャの仕様で常に親より手前に固定され、メインウィンドウを
+        # クリックしてもビューアが裏へ回らないため。参照は
+        # ``self._data_viewer_dialogs``が保持し、終了時にcloseEventで閉じる。
+        dialog = DataViewerDialog(valid_paths)
         self._data_viewer_dialogs.append(dialog)
         dialog.finished.connect(lambda _result, d=dialog: self._on_data_viewer_closed(d))
         dialog.show()

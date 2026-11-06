@@ -14,18 +14,23 @@ Qt非依存の純Pythonロジックとして分離し、単体テスト可能に
 
 review.md項目1: 開いた後から「ファイルを追加...」ボタンで別の測定CSVを
 同じプロットへ重ね描きし、比較できるようにする。ファイルごとに色を変え、
-凡例はファイル名(拡張子なしのstem)で区別する。
+凡例はファイル数によらず常にファイル名(拡張子なしのstem)で区別する。
+ファイル選択は複数選択に対応しており、まとめて開いて重ね描きできる。
+
+素子面積を入力すると、縦軸を電流[A]から電流密度[mA/cm2]へ切り替えられる
+(J-V特性)。面積の既定値は``DEFAULT_DEVICE_AREA_MM2``。
 """
 from __future__ import annotations
 
 import csv
 import os
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple, Union
 
 import pyqtgraph as pg
 
-from qtcompat import QtWidgets
+from qtcompat import Qt, QtWidgets, enum_value
 from views import plot_buffer
+from views.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox
 
 # views/plot_buffer.pyの配色(電流=青系/輝度=赤系)に合わせる。
 _CURRENT_LINE_COLOR = "#1f77b4"
@@ -43,6 +48,27 @@ _FILE_COLOR_CYCLE = [
     "#7f7f7f",  # gray
     "#17becf",  # cyan
 ]
+
+# 素子面積の既定値[mm2]。研究室で標準的に使う素子サイズに合わせる。
+DEFAULT_DEVICE_AREA_MM2 = 4.0
+
+# 1cm2 = 100mm2。面積[mm2]から電流密度[mA/cm2]への換算に使う。
+_MM2_PER_CM2 = 100.0
+
+
+def current_density_ma_per_cm2(current_a: float, area_mm2: float) -> float:
+    """電流[A]と素子面積[mm2]から電流密度[mA/cm2]を求める(Qt非依存の純ロジック)。
+
+    J[mA/cm2] = I[A] * 1000 / (面積[mm2] / 100)
+
+    Args:
+        current_a: 電流[A]。
+        area_mm2: 素子面積[mm2]。0以下の場合は換算できないため0.0を返す。
+    """
+    if area_mm2 <= 0:
+        return 0.0
+    area_cm2 = area_mm2 / _MM2_PER_CM2
+    return current_a * 1000.0 / area_cm2
 
 
 def parse_measurement_csv(
@@ -109,14 +135,23 @@ class DataViewerDialog(QtWidgets.QDialog):
     同じプロットへ重ね描きできる。``self._series``に読み込んだファイルごとの
     カーブ情報を保持し、色は``_FILE_COLOR_CYCLE``から順に割り当てる
     (1ファイル目は従来通り``_CURRENT_LINE_COLOR``/``_LUMINANCE_LINE_COLOR``)。
+    凡例のラベルはファイル数によらずファイル名(stem)で統一する。
+    コンストラクタとファイル追加はどちらも複数パスを受け取れる。
+
+    ウィンドウは``Qt.Window``フラグを立てた独立ウィンドウにする。親を持つ
+    QDialogのままだと、ウィンドウマネージャの仕様で常に親(メインウィンドウ)より
+    手前に固定され、メインウィンドウをクリックしてもビューアが裏へ回らない。
     """
 
-    def __init__(self, path: str, parent=None) -> None:
+    def __init__(self, paths: Union[str, Sequence[str]], parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("DataViewerDialog")
-        self._series: List[dict] = []  # 各要素: {"path", "current_curve", "luminance_curve"}
+        # 親の手前に固定されない独立ウィンドウにする(タスクバーにも個別に並ぶ)。
+        self.setWindowFlags(enum_value(Qt, "Window"))
+        # 各要素: {"path", "voltages", "currents", "current_curve", "luminance_curve"}
+        self._series: List[dict] = []
         self._build_ui()
-        self._add_file(path)
+        self.add_files(paths)
 
     def _build_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
@@ -128,6 +163,26 @@ class DataViewerDialog(QtWidgets.QDialog):
         )
         self.add_file_button.clicked.connect(self._on_add_file_clicked)
         button_row.addWidget(self.add_file_button)
+
+        # 素子面積と電流密度表示(J-V)の切り替え
+        button_row.addSpacing(12)
+        button_row.addWidget(QtWidgets.QLabel("素子面積:"))
+        self.area_spin = NoScrollDoubleSpinBox(objectName="dataViewer_areaSpin")
+        self.area_spin.setRange(0.0001, 10000.0)
+        self.area_spin.setDecimals(4)
+        self.area_spin.setSingleStep(0.1)
+        self.area_spin.setValue(DEFAULT_DEVICE_AREA_MM2)
+        self.area_spin.setSuffix(" mm2")
+        self.area_spin.setMaximumWidth(120)
+        self.area_spin.valueChanged.connect(self._on_current_axis_setting_changed)
+        button_row.addWidget(self.area_spin)
+
+        self.current_density_checkbox = QtWidgets.QCheckBox(
+            "電流密度で表示 (J-V)", objectName="dataViewer_currentDensityCheckBox"
+        )
+        self.current_density_checkbox.toggled.connect(self._on_current_axis_setting_changed)
+        button_row.addWidget(self.current_density_checkbox)
+
         button_row.addStretch()
         layout.addLayout(button_row)
 
@@ -142,15 +197,57 @@ class DataViewerDialog(QtWidgets.QDialog):
         self.resize(720, 520)
 
     # ------------------------------------------------------------------
+    # 縦軸(電流 / 電流密度)の切り替え
+    # ------------------------------------------------------------------
+    def _is_current_density_mode(self) -> bool:
+        return self.current_density_checkbox.isChecked()
+
+    def _current_values_for_plot(self, currents: Sequence[float]) -> List[float]:
+        """現在の表示設定に応じた縦軸の値(電流[A] or 電流密度[mA/cm2])を返す。"""
+        if not self._is_current_density_mode():
+            return list(currents)
+        area_mm2 = self.area_spin.value()
+        return [current_density_ma_per_cm2(c, area_mm2) for c in currents]
+
+    def _apply_current_axis_label(self) -> None:
+        """縦軸ラベルを現在の表示設定に合わせる。
+
+        電流密度側は``units``引数を使わない。pyqtgraphは``units``を渡すと
+        SI接頭辞を自動付与するため、``mA/cm2``に対して更に接頭辞が付いて
+        ``kmA/cm2``のような表示になってしまうため。
+        """
+        if self._is_current_density_mode():
+            self.plot_widget.setLabel("left", "Current density (mA/cm2)")
+        else:
+            self.plot_widget.setLabel("left", "Current", units="A")
+
+    def _on_current_axis_setting_changed(self, *_args) -> None:
+        """面積の変更・J-V切り替えを、既に描画済みの全カーブへ反映する。"""
+        for series in self._series:
+            series["current_curve"].setData(
+                series["voltages"], self._current_values_for_plot(series["currents"])
+            )
+        self._apply_current_axis_label()
+        # 桁が大きく変わる(A ⇔ mA/cm2)ため、表示範囲を取り直す。
+        self.plot_widget.getPlotItem().enableAutoRange()
+
+    # ------------------------------------------------------------------
     # ファイル追加(初回・以降とも共通の内部処理)
     # ------------------------------------------------------------------
     def _on_add_file_clicked(self) -> None:
-        path, _filter = QtWidgets.QFileDialog.getOpenFileName(
+        paths, _filter = QtWidgets.QFileDialog.getOpenFileNames(
             self, "測定CSVを追加", "", "CSV Files (*.csv);;All Files (*)"
         )
-        if not path:
+        if not paths:
             return
-        self._add_file(path)
+        self.add_files(paths)
+
+    def add_files(self, paths: Union[str, Sequence[str]]) -> None:
+        """1つ以上のCSVを読み込んで重ね描きする(単一パスの文字列も受け付ける)。"""
+        if isinstance(paths, str):
+            paths = [paths]
+        for path in paths:
+            self._add_file(path)
 
     def _add_file(self, path: str) -> None:
         """1ファイル分のカーブを読み込み、既存プロットへ重ね描きする。
@@ -172,21 +269,23 @@ class DataViewerDialog(QtWidgets.QDialog):
         line_width = float(style.get("graph_line_width", 2.0))
         symbol_size = int(style.get("graph_symbol_size", 6))
 
+        # 凡例はファイル数によらず常にファイル名(stem)で統一する。1ファイル目だけ
+        # "Current"/"Luminance"にすると、複数ファイルを比較したときに1件目だけ
+        # ファイル名が分からず不揃いになるため。色は従来通り、1ファイル目のみ
+        # 測定タブと同じ配色(電流=青/輝度=赤)を維持する。
+        current_label = stem
+        luminance_label = f"{stem} (L)"
         if index == 0:
             current_color = _CURRENT_LINE_COLOR
             luminance_color = _LUMINANCE_LINE_COLOR
-            current_label = "Current"
-            luminance_label = "Luminance"
         else:
             current_color = _FILE_COLOR_CYCLE[(index - 1) % len(_FILE_COLOR_CYCLE)]
             luminance_color = current_color
-            current_label = stem
-            luminance_label = f"{stem} (L)"
 
         current_pen = pg.mkPen(current_color, width=line_width)
         current_curve = self.plot_widget.plot(
             voltages,
-            currents,
+            self._current_values_for_plot(currents),
             pen=current_pen,
             symbol="o",
             symbolSize=symbol_size,
@@ -208,6 +307,8 @@ class DataViewerDialog(QtWidgets.QDialog):
 
         self._series.append({
             "path": path,
+            "voltages": voltages,
+            "currents": currents,
             "current_curve": current_curve,
             "luminance_curve": luminance_curve,
         })
@@ -223,6 +324,9 @@ class DataViewerDialog(QtWidgets.QDialog):
             self.setWindowTitle(f"データビューア - {filename}")
         else:
             self.setWindowTitle(f"データビューア ({count}件)")
+
+        # 縦軸ラベルは現在の表示設定(電流 / 電流密度)に合わせ直す。
+        self._apply_current_axis_label()
 
         # 現在のグラフ表示設定(目盛フォント・グリッド・凡例表示等)を反映する。
         plot_buffer.apply_graph_style([self.plot_widget], style)

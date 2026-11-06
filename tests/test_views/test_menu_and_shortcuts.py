@@ -107,8 +107,8 @@ def test_open_data_menu_shows_error_for_invalid_file(qtbot, monkeypatch, tmp_pat
     bad_csv.write_text("not,valid,csv\nfoo,bar,baz\n", encoding="utf-8")
 
     monkeypatch.setattr(
-        "views.main_window.QtWidgets.QFileDialog.getOpenFileName",
-        lambda *args, **kwargs: (str(bad_csv), "CSV Files (*.csv)"),
+        "views.main_window.QtWidgets.QFileDialog.getOpenFileNames",
+        lambda *args, **kwargs: ([str(bad_csv)], "CSV Files (*.csv)"),
     )
     warnings = []
     monkeypatch.setattr(
@@ -135,8 +135,8 @@ def test_open_data_menu_opens_viewer_for_valid_file(qtbot, monkeypatch, tmp_path
     )
 
     monkeypatch.setattr(
-        "views.main_window.QtWidgets.QFileDialog.getOpenFileName",
-        lambda *args, **kwargs: (str(good_csv), "CSV Files (*.csv)"),
+        "views.main_window.QtWidgets.QFileDialog.getOpenFileNames",
+        lambda *args, **kwargs: ([str(good_csv)], "CSV Files (*.csv)"),
     )
 
     window._on_menu_open_data()
@@ -147,3 +147,98 @@ def test_open_data_menu_opens_viewer_for_valid_file(qtbot, monkeypatch, tmp_path
     assert window._data_viewer_dialogs == []
 
     window.close()
+
+
+def test_open_data_menu_opens_multiple_files_in_one_viewer(qtbot, monkeypatch, tmp_path):
+    """複数選択したCSVは、1つのビューアへまとめて重ね描きされる。"""
+    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    paths = []
+    for i in range(3):
+        csv_path = tmp_path / f"multi{i}.csv"
+        csv_path.write_text(
+            "voltage [V],current [A]\n0.0,0.001\n0.1,0.002\n", encoding="utf-8"
+        )
+        paths.append(str(csv_path))
+
+    monkeypatch.setattr(
+        "views.main_window.QtWidgets.QFileDialog.getOpenFileNames",
+        lambda *args, **kwargs: (paths, "CSV Files (*.csv)"),
+    )
+
+    window._on_menu_open_data()
+
+    # ビューアは1つだけ開き、その中に3ファイル分のカーブが載る
+    assert len(window._data_viewer_dialogs) == 1
+    dialog = window._data_viewer_dialogs[0]
+    qtbot.addWidget(dialog)
+    assert len(dialog._series) == 3
+
+    dialog.close()
+    window.close()
+
+
+def test_open_data_menu_skips_invalid_files_and_opens_valid_ones(qtbot, monkeypatch, tmp_path):
+    """複数選択に読み込めないCSVが混ざっていても、有効なファイルだけで開く。"""
+    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    good_csv = tmp_path / "good.csv"
+    good_csv.write_text(
+        "voltage [V],current [A]\n0.0,0.001\n0.1,0.002\n", encoding="utf-8"
+    )
+    bad_csv = tmp_path / "bad.csv"
+    bad_csv.write_text("not,valid,csv\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "views.main_window.QtWidgets.QFileDialog.getOpenFileNames",
+        lambda *args, **kwargs: ([str(good_csv), str(bad_csv)], "CSV Files (*.csv)"),
+    )
+    warnings = []
+    monkeypatch.setattr(
+        "views.main_window.QtWidgets.QMessageBox.warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+
+    window._on_menu_open_data()
+
+    assert len(warnings) == 1
+    assert len(window._data_viewer_dialogs) == 1
+    dialog = window._data_viewer_dialogs[0]
+    qtbot.addWidget(dialog)
+    assert len(dialog._series) == 1
+
+    dialog.close()
+    window.close()
+
+
+def test_closing_main_window_closes_open_data_viewers(qtbot, monkeypatch, tmp_path):
+    """メインウィンドウを閉じると、開いたままのデータビューアも閉じる。
+
+    ビューアは親を持たない独立ウィンドウのため、明示的に閉じないと
+    アプリのウィンドウが残り続けてしまう。
+    """
+    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    good_csv = tmp_path / "good.csv"
+    good_csv.write_text(
+        "voltage [V],current [A]\n0.0,0.001\n0.1,0.002\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "views.main_window.QtWidgets.QFileDialog.getOpenFileNames",
+        lambda *args, **kwargs: ([str(good_csv)], "CSV Files (*.csv)"),
+    )
+
+    window._on_menu_open_data()
+    dialog = window._data_viewer_dialogs[0]
+    qtbot.addWidget(dialog)
+
+    window.close()
+
+    assert not dialog.isVisible()
+    assert window._data_viewer_dialogs == []
