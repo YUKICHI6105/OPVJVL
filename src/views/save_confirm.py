@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from typing import Sequence
 
 from qtcompat import QtWidgets, enum_value
@@ -31,15 +32,27 @@ def ensure_save_dir(parent, save_dir_edit: QtWidgets.QLineEdit) -> bool:
     Returns:
         測定開始を続行してよければTrue、中止すべきならFalse。
     """
-    if save_dir_edit.text().strip():
-        return True
+    directory = save_dir_edit.text().strip()
+    if directory:
+        try:
+            if not os.path.isdir(directory):
+                raise FileNotFoundError(directory)
+            with tempfile.TemporaryFile(dir=directory):
+                pass
+            return True
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(
+                parent, "保存先を確認してください",
+                f"保存先に書き込めません。別のフォルダーを選択してください。\n\n{exc}",
+            )
 
     directory = QtWidgets.QFileDialog.getExistingDirectory(parent, "保存先ディレクトリを選択")
     if directory:
         save_dir_edit.setText(directory)
-        return True
+        return ensure_save_dir(parent, save_dir_edit)
 
-    QtWidgets.QMessageBox.information(parent, "保存先未指定", "保存先を指定してください")
+    if not save_dir_edit.text().strip():
+        QtWidgets.QMessageBox.information(parent, "保存先未指定", "保存先を指定してください")
     return False
 
 
