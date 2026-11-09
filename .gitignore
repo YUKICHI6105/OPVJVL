@@ -6,6 +6,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 settings.json
+alarm_sounds/
 
 # 動作確認で生成される測定データ・一時ログ(リポジトリ直下)
 /sample_*_measurement_data.csv

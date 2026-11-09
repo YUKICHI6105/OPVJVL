@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from qtcompat import QObject, QtWidgets, pyqtSignal
-from utils import persistence
+from utils import alarm_library, persistence
 from views import notify_sound
 from views.alarm_settings_dialog import AlarmSettingsDialog
 from views.main_window import MainWindow
@@ -27,13 +27,60 @@ def test_alarm_settings_save_reload_preserves_measurement_directories(qtbot, tmp
     window.close()
     reopened = AlarmSettingsDialog()
     qtbot.addWidget(reopened)
-    assert reopened.get_settings() == {"alarm_mode": "file", "alarm_file": str(audio)}
+    stored = alarm_library.library_directory() / audio.name
+    assert reopened.get_settings() == {"alarm_mode": "file", "alarm_file": str(stored)}
+    assert stored.read_bytes() == audio.read_bytes()
     assert {key: persistence.load_settings()[key] for key in paths} == paths
     reopened.mode_combo.setCurrentIndex(reopened.mode_combo.findData("none"))
     assert not reopened.file_edit.isEnabled()
     assert not reopened.preview_button.isEnabled()
     reopened.accept()
     assert persistence.load_settings()["alarm_mode"] == "none"
+
+
+def test_added_audio_remains_available_after_cancel_and_restart(qtbot, monkeypatch, tmp_path):
+    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    originals = [tmp_path / "one.mp3", tmp_path / "two.wav"]
+    for path in originals:
+        path.write_bytes(path.name.encode())
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getOpenFileNames",
+                        lambda *args: ([str(path) for path in originals], ""))
+    dialog = AlarmSettingsDialog()
+    qtbot.addWidget(dialog)
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("file"))
+    dialog.browse_button.click()
+    assert dialog.library_combo.count() == 2
+    dialog.reject()
+    assert persistence.load_settings()["alarm_mode"] == "standard"
+    for path in originals:
+        path.unlink()
+    reopened = AlarmSettingsDialog()
+    qtbot.addWidget(reopened)
+    assert reopened.library_combo.count() == 2
+    reopened.mode_combo.setCurrentIndex(reopened.mode_combo.findData("file"))
+    reopened.library_combo.setCurrentIndex(0)
+    reopened.accept()
+    selected = persistence.load_settings()["alarm_file"]
+    assert selected == str(alarm_library.library_directory() / "one.mp3")
+    again = AlarmSettingsDialog()
+    qtbot.addWidget(again)
+    assert again.library_combo.currentData() == selected
+
+
+def test_previous_external_audio_is_copied_when_saved(qtbot, monkeypatch, tmp_path):
+    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    original = tmp_path / "existing.wav"
+    original.write_bytes(b"audio")
+    persistence.save_settings({"alarm_mode": "file", "alarm_file": str(original)})
+    dialog = AlarmSettingsDialog()
+    qtbot.addWidget(dialog)
+    assert "未登録" in dialog.library_combo.currentText()
+    dialog.accept()
+    original.unlink()
+    reopened = AlarmSettingsDialog()
+    qtbot.addWidget(reopened)
+    assert "未登録" not in reopened.library_combo.currentText()
+    assert reopened.file_edit.text() == str(alarm_library.library_directory() / original.name)
 
 
 def test_cancel_does_not_change_alarm(qtbot, monkeypatch, tmp_path):
