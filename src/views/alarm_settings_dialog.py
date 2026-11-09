@@ -17,17 +17,11 @@ class AlarmSettingsDialog(QtWidgets.QDialog):
         self.setMinimumWidth(520)
         self._preview_dialog = None
         settings = persistence.load_settings()
+        self._last_file = settings["alarm_file"]
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(QtWidgets.QLabel("全測定モードの測定完了アラームに適用します。"))
         self.mode_combo = NoScrollComboBox(objectName="alarmModeCombo")
-        for label, value in (("標準音", "standard"), ("音源ファイル", "file"),
-                             ("アラームなし（音・ポップアップなし）", "none")):
-            self.mode_combo.addItem(label, value)
-        self.mode_combo.setCurrentIndex(max(0, self.mode_combo.findData(settings["alarm_mode"])))
         layout.addWidget(self.mode_combo)
-        self.library_combo = NoScrollComboBox(objectName="alarmLibraryCombo")
-        layout.addWidget(QtWidgets.QLabel("登録済みの音源:"))
-        layout.addWidget(self.library_combo)
         file_row = QtWidgets.QHBoxLayout()
         self.file_edit = QtWidgets.QLineEdit(settings["alarm_file"], objectName="alarmFileEdit")
         self.file_edit.setReadOnly(True)
@@ -51,16 +45,18 @@ class AlarmSettingsDialog(QtWidgets.QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.mode_combo.currentIndexChanged.connect(self._update_controls)
-        self.library_combo.currentIndexChanged.connect(self._select_sound)
         self.finished.connect(self._stop_preview)
-        self._reload_library(settings["alarm_file"])
-        self._update_controls()
+        selected = settings["alarm_file"] if settings["alarm_mode"] == "file" else settings["alarm_mode"]
+        self._reload_library(selected)
 
     def _update_controls(self, *_args):
-        mode = self.mode_combo.currentData()
+        selected = self.mode_combo.currentData()
+        mode = selected if selected in ("none", "standard") else "file"
+        if mode == "file":
+            self._last_file = selected or ""
+        self.file_edit.setText(self._last_file)
+        self.file_edit.setToolTip(self._last_file)
         self.file_edit.setEnabled(mode == "file")
-        self.library_combo.setEnabled(mode == "file")
-        self.browse_button.setEnabled(mode == "file")
         self.preview_button.setEnabled(mode != "none")
         self._stop_preview()
 
@@ -69,11 +65,12 @@ class AlarmSettingsDialog(QtWidgets.QDialog):
             self, "追加するアラーム音源を選択（複数選択可）", "",
             "音声ファイル (*.wav *.mp3 *.flac *.ogg *.m4a)",
         )
-        selected = self.file_edit.text()
+        selected = self.mode_combo.currentData()
         errors = []
         for path in paths:
             try:
                 selected = alarm_library.import_sound(path)
+                self._last_file = selected
             except (OSError, ValueError) as exc:
                 errors.append(f"{path}\n{exc}")
         if paths:
@@ -87,30 +84,29 @@ class AlarmSettingsDialog(QtWidgets.QDialog):
         except OSError as exc:
             QtWidgets.QMessageBox.warning(self, "音源を読み込めません", str(exc))
             paths = []
-        self.library_combo.blockSignals(True)
-        self.library_combo.clear()
-        for path in paths:
-            self.library_combo.addItem(os.path.basename(path), path)
-        if selected and selected not in paths:
-            self.library_combo.addItem(f"{os.path.basename(selected)}（未登録）", selected)
-        if self.library_combo.count() == 0:
-            self.library_combo.addItem("音源を追加してください", "")
-        index = self.library_combo.findData(selected)
-        self.library_combo.setCurrentIndex(max(0, index))
-        self.library_combo.blockSignals(False)
-        self._select_sound()
-
-    def _select_sound(self, *_args):
-        self._stop_preview()
-        path = self.library_combo.currentData() or ""
-        self.file_edit.setText(path)
-        self.file_edit.setToolTip(path)
+        unregistered = self._last_file if self._last_file and self._last_file not in paths else None
+        if unregistered:
+            paths.append(unregistered)
+        self.mode_combo.blockSignals(True)
+        self.mode_combo.clear()
+        self.mode_combo.addItem("アラームなし", "none")
+        self.mode_combo.addItem("標準音", "standard")
+        for number, path in enumerate(paths, 1):
+            suffix = "（未登録）" if path == unregistered else ""
+            self.mode_combo.addItem(f"入力音源{number}：{os.path.basename(path)}{suffix}", path)
+        index = self.mode_combo.findData(selected)
+        self.mode_combo.setCurrentIndex(index if index >= 0 else 1)
+        self.mode_combo.blockSignals(False)
+        self._update_controls()
 
     def get_settings(self):
-        path = self.file_edit.text().strip()
+        selected = self.mode_combo.currentData()
+        mode = selected if selected in ("none", "standard") else "file"
+        path = selected if mode == "file" else self._last_file
+        path = (path or "").strip()
         if path:
             path = os.path.abspath(os.path.expanduser(path))
-        return {"alarm_mode": self.mode_combo.currentData(), "alarm_file": path}
+        return {"alarm_mode": mode, "alarm_file": path}
 
     def _validate(self):
         settings = self.get_settings()
@@ -151,6 +147,7 @@ class AlarmSettingsDialog(QtWidgets.QDialog):
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.warning(self, "音源を保持できません", str(exc))
                 return
+            self._last_file = settings["alarm_file"]
             self._reload_library(settings["alarm_file"])
         persistence.save_settings(settings)
         saved = persistence.load_settings()

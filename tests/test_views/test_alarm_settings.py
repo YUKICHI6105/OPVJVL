@@ -21,7 +21,7 @@ def test_alarm_settings_save_reload_preserves_measurement_directories(qtbot, tmp
     persistence.save_settings({"alarm_mode": "file", "alarm_file": str(audio)})
     dialog = AlarmSettingsDialog(window)
     qtbot.addWidget(dialog)
-    assert "未登録" in dialog.library_combo.currentText()
+    assert "未登録" in dialog.mode_combo.currentText()
     dialog.accept()
     assert dialog.result() == 1
     window.close()
@@ -48,30 +48,32 @@ def test_added_audio_remains_available_after_cancel_and_restart(qtbot, monkeypat
                         lambda *args: ([str(path) for path in originals], ""))
     dialog = AlarmSettingsDialog()
     qtbot.addWidget(dialog)
-    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("file"))
     dialog.browse_button.click()
-    assert dialog.library_combo.count() == 2
+    assert [dialog.mode_combo.itemText(index) for index in range(dialog.mode_combo.count())] == [
+        "アラームなし", "標準音", "入力音源1：one.mp3", "入力音源2：two.wav",
+    ]
     dialog.reject()
     assert persistence.load_settings()["alarm_mode"] == "standard"
     for path in originals:
         path.unlink()
     reopened = AlarmSettingsDialog()
     qtbot.addWidget(reopened)
-    assert reopened.library_combo.count() == 2
-    reopened.mode_combo.setCurrentIndex(reopened.mode_combo.findData("file"))
-    reopened.library_combo.setCurrentIndex(0)
+    assert reopened.mode_combo.count() == 4
+    reopened.mode_combo.setCurrentIndex(2)
     reopened.accept()
     selected = persistence.load_settings()["alarm_file"]
     assert selected == str(alarm_library.library_directory() / "one.mp3")
     again = AlarmSettingsDialog()
     qtbot.addWidget(again)
-    assert again.library_combo.currentData() == selected
+    assert again.mode_combo.currentData() == selected
+    assert again.mode_combo.currentText() == "入力音源1：one.mp3"
 
 
 def test_preview_uses_unsaved_selection_and_stops_on_cancel(qtbot, monkeypatch, tmp_path):
     monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
     path = tmp_path / "music.mp3"
     path.write_bytes(b"audio")
+    stored = alarm_library.import_sound(str(path))
     calls = []
     preview = QtWidgets.QDialog()
     qtbot.addWidget(preview)
@@ -82,10 +84,9 @@ def test_preview_uses_unsaved_selection_and_stops_on_cancel(qtbot, monkeypatch, 
     monkeypatch.setattr(notify_sound, "play_completion_sound", play)
     dialog = AlarmSettingsDialog()
     qtbot.addWidget(dialog)
-    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("file"))
-    dialog.file_edit.setText(str(path))
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData(stored))
     dialog.preview_button.click()
-    assert calls == [{"settings": {"alarm_mode": "file", "alarm_file": str(path)}, "preview": True}]
+    assert calls == [{"settings": {"alarm_mode": "file", "alarm_file": stored}, "preview": True}]
     assert persistence.load_settings()["alarm_mode"] == "standard"
     dialog.reject()
     assert not preview.isVisible()
@@ -95,14 +96,14 @@ def test_missing_audio_cannot_be_saved(qtbot, monkeypatch, tmp_path):
     monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
     warnings = []
     monkeypatch.setattr(QtWidgets.QMessageBox, "warning", lambda *args: warnings.append(args))
+    missing = str(tmp_path / "missing.mp3")
+    persistence.save_settings({"alarm_mode": "file", "alarm_file": missing})
     dialog = AlarmSettingsDialog()
     qtbot.addWidget(dialog)
-    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("file"))
-    dialog.file_edit.setText(str(tmp_path / "missing.mp3"))
     dialog.accept()
     assert warnings
     assert dialog.result() == 0
-    assert persistence.load_settings()["alarm_mode"] == "standard"
+    assert persistence.load_settings()["alarm_file"] == missing
 
 
 def test_saving_no_alarm_stops_existing_notification(qtbot, monkeypatch, tmp_path):
