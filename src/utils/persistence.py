@@ -110,9 +110,15 @@ MEASUREMENT_SETTINGS_DEFAULTS: dict = {
 }
 
 #: settings.json 全体のデフォルト
+ALARM_SETTINGS_DEFAULTS: dict = {
+    "alarm_mode": "standard",  # standard / file / none
+    "alarm_file": "",
+}
+
 DEFAULT_SETTINGS: dict = {}
 DEFAULT_SETTINGS.update(DEVICE_SETTINGS_DEFAULTS)
 DEFAULT_SETTINGS.update(MEASUREMENT_SETTINGS_DEFAULTS)
+DEFAULT_SETTINGS.update(ALARM_SETTINGS_DEFAULTS)
 
 
 def ensure_settings_exist() -> bool:

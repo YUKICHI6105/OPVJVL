@@ -2,8 +2,7 @@
 
 正常完了時は、Windowsの通常のオーディオ出力から約20秒間のアラームを
 非同期再生する。波形自体はクリップしない範囲で大きく生成し、実際の音量は
-Windowsのシステム音量に従う。ユーザーによる中断とエラーは、長いアラームに
-せず従来どおりOS標準の短い通知音で鳴らし分ける。
+Windowsのシステム音量に従う。設定により標準音・音源ファイル・無効を選べる。
 
 正常完了以外では音を鳴らさない。これにより、Windows標準の効果音が
 完了アラームとして鳴ることを防ぐ。
@@ -17,7 +16,8 @@ import os
 import tempfile
 import wave
 
-from qtcompat import QTimer, QtWidgets
+from qtcompat import QTimer, QtCore, QtWidgets, enum_value, load_qt_multimedia
+from utils import persistence
 from utils.logger import get_logger
 
 try:
@@ -68,6 +68,28 @@ def _build_success_alarm() -> bytes:
 # 一時WAVファイルの作成元として、生成済み波形をモジュール全体で保持する。
 _SUCCESS_ALARM_WAV = _build_success_alarm()
 _success_alarm_path: str | None = None
+_custom_player = None
+
+
+def _create_custom_player(path: str):
+    """Qt5/Qt6のプレイヤーを準備し、参照を保持してGCを防ぐ。"""
+    global _custom_player
+    if not os.path.isfile(path):
+        raise OSError(f"音源ファイルが見つかりません: {path}")
+    multimedia = load_qt_multimedia()
+    player = multimedia.QMediaPlayer()
+    url = QtCore.QUrl.fromLocalFile(os.path.abspath(path))
+    if hasattr(multimedia, "QAudioOutput"):
+        output = multimedia.QAudioOutput(player)
+        output.setVolume(1.0)
+        player.setAudioOutput(output)
+        player._audio_output = output
+        player.setSource(url)
+    else:
+        player.setVolume(100)
+        player.setMedia(multimedia.QMediaContent(url))
+    _custom_player = player
+    return player
 
 
 def _get_success_alarm_path() -> str:
@@ -99,6 +121,15 @@ def _get_success_alarm_path() -> str:
 
 def stop_completion_sound() -> None:
     """現在再生中のアラームを直ちに停止する。"""
+    global _custom_player
+    player = _custom_player
+    _custom_player = None
+    if player is not None:
+        try:
+            player.stop()
+            player.deleteLater()
+        except RuntimeError:
+            pass
     if winsound is None:
         return
     try:
@@ -126,14 +157,14 @@ atexit.register(_cleanup_success_alarm_file)
 class CompletionAlarmDialog(QtWidgets.QDialog):
     """OS標準音を鳴らさない、停止ボタン付きの非モーダル通知。"""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, preview=False) -> None:
         super().__init__(parent)
         self.setObjectName("completionAlarmDialog")
-        self.setWindowTitle("測定完了")
+        self.setWindowTitle("アラーム試聴" if preview else "測定完了")
         self.setModal(False)
 
         layout = QtWidgets.QVBoxLayout(self)
-        title_label = QtWidgets.QLabel("測定が完了しました。", self)
+        title_label = QtWidgets.QLabel("アラームを試聴しています。" if preview else "測定が完了しました。", self)
         title_label.setObjectName("completionAlarmTitleLabel")
         title_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(title_label)
@@ -207,7 +238,7 @@ def dismiss_completion_alarm() -> None:
 
 
 def play_completion_sound(
-    outcome: str = "success", parent=None
+    outcome: str = "success", parent=None, *, settings=None, preview=False
 ) -> CompletionAlarmDialog | None:
     """計測の結果種別に応じた音を鳴らす。
 
@@ -226,7 +257,12 @@ def play_completion_sound(
     if outcome != "success":
         return None
 
-    if winsound is None:
+    settings = persistence.load_settings() if settings is None else settings
+    mode = settings.get("alarm_mode", "standard")
+    if mode == "none":
+        return None
+
+    if mode != "file" and winsound is None:
         logger.warning("測定完了アラームを再生できません: winsoundが利用できません")
         return None
 
@@ -234,16 +270,25 @@ def play_completion_sound(
         # Python 3.13ではSND_MEMORYとSND_ASYNCの併用が禁止されているため、
         # 一時WAVファイルを非同期再生する。これならGUIをブロックせず、
         # PlaySound(None, 0)による即時停止も可能。
-        alarm_path = _get_success_alarm_path()
-        winsound.PlaySound(alarm_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-    except (OSError, RuntimeError) as error:
+        player = None
+        if mode == "file":
+            player = _create_custom_player(settings.get("alarm_file", ""))
+        else:
+            alarm_path = _get_success_alarm_path()
+            winsound.PlaySound(alarm_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+    except (OSError, RuntimeError, ImportError) as error:
+        stop_completion_sound()
         logger.warning("測定完了アラームを再生できませんでした: %s", error)
         return None
 
     if parent is None:
+        if player is not None:
+            QTimer.singleShot(_ALARM_DURATION_MILLISECONDS,
+                              lambda: stop_completion_sound() if _custom_player is player else None)
+            player.play()
         return None
 
-    dialog = CompletionAlarmDialog(parent)
+    dialog = CompletionAlarmDialog(parent, preview=preview)
     _active_alarm_dialog = dialog
     dialog.destroyed.connect(
         lambda _object=None, expected=dialog: _on_alarm_dialog_destroyed(expected)
@@ -251,4 +296,23 @@ def play_completion_sound(
     dialog.show()
     dialog.raise_()
     dialog.activateWindow()
+    if player is not None:
+        multimedia = load_qt_multimedia()
+        def on_status(status):
+            if _active_alarm_dialog is dialog and status == enum_value(multimedia.QMediaPlayer, "EndOfMedia"):
+                dialog.accept()
+        def on_error(*_args):
+            if _active_alarm_dialog is dialog:
+                message = player.errorString()
+                logger.warning("音源を再生できません: %s", message)
+                dialog.findChild(QtWidgets.QLabel, "completionAlarmMessageLabel").setText(
+                    f"音源を再生できませんでした。ファイル形式や保存場所を確認してください。\n{message}"
+                )
+                dialog.stop_button.setText("閉じる")
+        player.mediaStatusChanged.connect(on_status)
+        error_signal = getattr(player, "errorOccurred", None)
+        if error_signal is None:
+            error_signal = player.error
+        error_signal.connect(on_error)
+        player.play()
     return dialog

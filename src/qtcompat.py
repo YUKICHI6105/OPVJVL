@@ -10,6 +10,7 @@ Qtバインディングを一致させるために PYQTGRAPH_QT_LIB 環境変数
 from __future__ import annotations
 
 import enum
+import importlib
 import os
 
 # High DPIスケーリングに関する環境変数は、PyQt5/PyQt6のいずれのバインディングを
@@ -40,6 +41,11 @@ except ImportError:
 # QApplicationの二重生成/クラッシュを引き起こす可能性がある。
 os.environ.setdefault("PYQTGRAPH_QT_LIB", QT_API)
 
+
+def load_qt_multimedia():
+    """選択済みQtバインディングの音声再生モジュールを必要時だけ読み込む。"""
+    return importlib.import_module(f"{QT_API}.QtMultimedia")
+
 __all__ = [
     "QT_API",
     "QAction",
@@ -53,6 +59,7 @@ __all__ = [
     "QtCore",
     "QtGui",
     "QtWidgets",
+    "load_qt_multimedia",
     "configure_high_dpi",
     "enum_value",
     "pyqtSignal",

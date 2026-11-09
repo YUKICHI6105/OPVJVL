@@ -15,6 +15,7 @@ from utils import device_settings, persistence, win32_utils
 from utils.logger import get_logger
 from utils.paths import get_log_dir
 from views import plot_buffer, theme
+from views.alarm_settings_dialog import AlarmSettingsDialog
 from views.data_viewer import DataViewerDialog, parse_measurement_csv
 from views.dialogs import DeviceSettingsDialog, DisplaySettingsDialog
 from views.dual_channel_tab import DualChannelTab
@@ -599,6 +600,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actionDisplaySettings.triggered.connect(self._open_display_settings_dialog)
         menuSettings.addAction(self.actionDisplaySettings)
 
+        self.actionAlarmSettings = QAction("アラームの設定...(&A)", self)
+        self.actionAlarmSettings.setObjectName("actionAlarmSettings")
+        self.actionAlarmSettings.triggered.connect(self._open_alarm_settings_dialog)
+        menuSettings.addAction(self.actionAlarmSettings)
+
         # --- ヘルプ メニュー ---
         menuHelp = menuBar.addMenu("ヘルプ(&H)")
         menuHelp.setObjectName("menuHelp")
@@ -731,6 +737,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _apply_graph_style(self) -> None:
         """現在のグラフ表示設定を全プロットへ適用する。"""
         plot_buffer.apply_graph_style(self._all_plot_widgets(), self._graph_style)
+
+    def _open_alarm_settings_dialog(self) -> None:
+        qt_exec(AlarmSettingsDialog(self))
 
     def _open_display_settings_dialog(self) -> None:
         """「グラフ表示の設定」ダイアログ(EQEのDisplaySettingsDialog移植)を開く。"""
