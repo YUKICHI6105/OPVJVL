@@ -17,6 +17,7 @@ def test_opv_config_hysteresis_false_is_unchanged():
     config = OPVConfig(v_min=0.0, v_max=0.2, v_step=0.1, iteration=1)  # 0.0, 0.1, 0.2
     voltages = config.build_voltage_list()
     np.testing.assert_allclose(voltages, [0.0, 0.1, 0.2])
+    assert config.forward_point_count() == len(voltages) == 3
 
 
 def test_opv_config_hysteresis_true_round_trip_no_duplicate_turnaround():
@@ -27,6 +28,7 @@ def test_opv_config_hysteresis_true_round_trip_no_duplicate_turnaround():
     voltages = config.build_voltage_list()
     # 往路(0.0, 0.1, 0.2) + 復路(0.1, 0.0)  ※Vmax=0.2の重複なし
     np.testing.assert_allclose(voltages, [0.0, 0.1, 0.2, 0.1, 0.0])
+    assert config.forward_point_count() == 3
 
 
 def test_opv_config_hysteresis_true_with_iteration():
@@ -38,6 +40,7 @@ def test_opv_config_hysteresis_true_with_iteration():
     voltages = config.build_voltage_list()
     # 往復連結: [0.0, 0.1, 0.0] をそれぞれ2回繰り返す
     np.testing.assert_allclose(voltages, [0.0, 0.0, 0.1, 0.1, 0.0, 0.0])
+    assert config.forward_point_count() == 4
 
 
 def test_channel_config_hysteresis_false_is_unchanged():
@@ -45,6 +48,7 @@ def test_channel_config_hysteresis_false_is_unchanged():
     config = ChannelConfig(v_min=0.0, v_max=0.2, v_step=0.1, iteration=1)
     voltages = config.build_voltage_list()
     np.testing.assert_allclose(voltages, [0.0, 0.1, 0.2])
+    assert config.forward_point_count() == len(voltages) == 3
 
 
 def test_channel_config_hysteresis_true_round_trip_no_duplicate_turnaround():
@@ -52,6 +56,7 @@ def test_channel_config_hysteresis_true_round_trip_no_duplicate_turnaround():
     config = ChannelConfig(v_min=0.0, v_max=0.2, v_step=0.1, iteration=1, hysteresis=True)
     voltages = config.build_voltage_list()
     np.testing.assert_allclose(voltages, [0.0, 0.1, 0.2, 0.1, 0.0])
+    assert config.forward_point_count() == 3
 
 
 def test_channel_config_hysteresis_true_with_iteration():
@@ -59,3 +64,4 @@ def test_channel_config_hysteresis_true_with_iteration():
     config = ChannelConfig(v_min=0.0, v_max=0.1, v_step=0.1, iteration=2, hysteresis=True)
     voltages = config.build_voltage_list()
     np.testing.assert_allclose(voltages, [0.0, 0.0, 0.1, 0.1, 0.0, 0.0])
+    assert config.forward_point_count() == 4

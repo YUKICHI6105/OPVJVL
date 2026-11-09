@@ -145,6 +145,8 @@ def test_auto_and_save_as_keep_original_sweep_settings(qtbot, tmp_path, monkeypa
     signal = tab.viewModel.finished_ok_a if kind == "dual_a" else tab.viewModel.finished_ok
     with qtbot.waitSignal(signal, timeout=10000):
         getattr(tab, f"{kind}_startButton").click()
+    qtbot.waitUntil(lambda: getattr(tab, f"{kind}_startButton").isEnabled(), timeout=5000)
+    assert not getattr(tab, f"{kind}_stopButton").isEnabled()
     label = "JVL" if kind == "jvl" else "OPV"
     expected = ["Forward"] * 6 + ["Backward"] * 4
     assert directions(tmp_path / f"test_{label}_measurement_data.csv") == expected

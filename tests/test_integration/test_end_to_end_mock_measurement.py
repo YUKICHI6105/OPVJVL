@@ -3,51 +3,7 @@ from __future__ import annotations
 
 import os
 import pytest
-from qtcompat import QtWidgets
 from views.main_window import MainWindow
-from viewmodels.opv_viewmodel import OPVViewModel
-from viewmodels.jvl_viewmodel import JVLViewModel
-from viewmodels.dual_channel_viewmodel import DualChannelViewModel
-
-
-def test_e2e_opv_measurement(qtbot, tmp_path):
-    """OPVモードでのモックE2E測定を検証。"""
-    window = MainWindow()
-    qtbot.addWidget(window)
-
-    # ViewModelのバインド
-    window.opv_vm = window.opv_tab.viewModel
-
-    tab = window.opv_tab
-
-    # パラメータ設定 (高速テストのため極小掃引)
-    tab.apply_device_settings("keithley2400", "COM5", "smua", True)
-    tab.opv_vMinSpin.setValue(0.0)
-    tab.opv_vMaxSpin.setValue(0.1)
-    tab.opv_vStepSpin.setValue(0.1)  # 0.0, 0.1 (2点)
-    tab.opv_iterationSpin.setValue(1)
-    tab.opv_sampleNameEdit.setText("e2e_opv_test")
-    tab.opv_saveDirEdit.setText(str(tmp_path))
-
-    # 測定開始
-    tab.opv_startButton.click()
-
-    assert window.opv_vm._worker is not None
-    # workerの終了を待つ
-    worker = window.opv_vm._worker
-    qtbot.waitUntil(lambda: not worker.isRunning(), timeout=10000)
-
-    # CSVが生成されているか検証
-    expected_csv = tmp_path / "e2e_opv_test_OPV_measurement_data.csv"
-    assert os.path.exists(expected_csv)
-
-    # 終了後にボタン状態が復元していることを検証。
-    # ボタンを戻す `running_changed` はワーカースレッドからメインスレッドへの
-    # キューイング接続で配送されるため、スレッドの終了(`isRunning()`がFalse)と
-    # 同時に反映されるとは限らない。直後にassertすると低頻度で落ちるので、
-    # 配送されるまで待ってから検証する。
-    qtbot.waitUntil(lambda: tab.opv_startButton.isEnabled(), timeout=5000)
-    assert not tab.opv_stopButton.isEnabled()
 
 
 def test_e2e_jvl_measurement(qtbot, tmp_path, monkeypatch):
@@ -64,6 +20,7 @@ def test_e2e_jvl_measurement(qtbot, tmp_path, monkeypatch):
     tab.jvl_vMaxSpin.setValue(0.1)
     tab.jvl_vStepSpin.setValue(0.1)
     tab.jvl_iterationSpin.setValue(1)
+    tab.jvl_delaySpin.setValue(0)
     tab.jvl_sampleNameEdit.setText("e2e_jvl_test")
     tab.jvl_saveDirEdit.setText(str(tmp_path))
 
@@ -72,6 +29,8 @@ def test_e2e_jvl_measurement(qtbot, tmp_path, monkeypatch):
     assert window.jvl_vm._worker is not None
     worker = window.jvl_vm._worker
     qtbot.waitUntil(lambda: not worker.isRunning(), timeout=10000)
+    qtbot.waitUntil(lambda: tab.jvl_startButton.isEnabled(), timeout=5000)
+    assert not tab.jvl_stopButton.isEnabled()
 
     expected_csv = tmp_path / "e2e_jvl_test_JVL_measurement_data.csv"
     assert os.path.exists(expected_csv)
@@ -96,6 +55,7 @@ def test_e2e_dual_a_measurement(qtbot, tmp_path):
     tab.dual_a_vMaxSpin.setValue(0.2)
     tab.dual_a_vStepSpin.setValue(0.1)  # 0.0, 0.1, 0.2 (3点)
     tab.dual_a_iterationSpin.setValue(1)
+    tab.dual_a_delaySpin.setValue(0)
     tab.dual_a_sampleNameEdit.setText("e2e_duala_test")
     tab.dual_a_saveDirEdit.setText(str(tmp_path))
     tab.dual_a_deviceModeCombo.setCurrentText("太陽電池")

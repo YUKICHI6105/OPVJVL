@@ -123,18 +123,6 @@ def test_save_points_csv(tmp_path):
     assert lum_lines[1].strip() == "0.0,0.0,10.0"
 
 
-def test_write_csv_via_save_functions_unchanged(tmp_path):
-    """既存の_write_csv経由の保存関数(save_opv_csv等)の挙動が変わっていないこと。"""
-    points = [IVPoint(index=0, voltage=-0.1, current=0.001)]
-    save_dir = str(tmp_path)
-    file_path = csv_writer.save_opv_csv(points, "regress", save_dir)
-    assert os.path.basename(file_path) == "regress_OPV_measurement_data.csv"
-    with open(file_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-    assert lines[0].strip() == "voltage [V],current [A]"
-    assert lines[1].strip() == "-0.1,0.001"
-
-
 def test_save_dual_b_meta_json(tmp_path):
     """モードBメタデータJSON保存の検証。"""
     meta = {

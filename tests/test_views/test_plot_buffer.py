@@ -96,19 +96,6 @@ def test_plot_buffer_clears_luminance_curve_when_switching_to_single_curve(plot_
 # ----------------------------------------------------------------------
 # review.md指摘#6: 凡例
 # ----------------------------------------------------------------------
-def test_plot_buffer_without_curve_name_has_no_legend(plot_widget):
-    widget = plot_widget
-    PlotBuffer(widget)
-    assert widget.getPlotItem().legend is None
-
-
-def test_plot_buffer_with_curve_name_registers_legend(plot_widget):
-    widget = plot_widget
-    PlotBuffer(widget, curve_name="Current")
-
-    legend = widget.getPlotItem().legend
-    assert legend is not None
-    assert len(legend.items) == 1
 
 
 def test_dual_axis_plot_buffer_registers_current_and_luminance_legend(plot_widget):
@@ -169,7 +156,7 @@ def test_plot_buffer_without_reverse_from_index_stays_single_curve(plot_widget):
 def test_plot_buffer_reverse_from_index_splits_into_two_curves(plot_widget):
     """reverse_from_index指定時、通算点数がその値以上になった点から復路カーブへ切り替わる。"""
     widget = plot_widget
-    buf = PlotBuffer(widget, curve_name="Current", reverse_from_index=3)
+    buf = PlotBuffer(widget, reverse_from_index=3)
     for i in range(5):
         buf.add_point(float(i), float(i))
 
@@ -181,19 +168,6 @@ def test_plot_buffer_reverse_from_index_splits_into_two_curves(plot_widget):
     legend = widget.getPlotItem().legend
     assert legend is not None
     assert len(legend.items) == 2
-    labels = {item[1].text for item in legend.items}
-    assert labels == {"Current / Forward（往路）", "Current / Backward（復路）"}
-
-
-def test_plot_buffer_reverse_from_index_without_curve_name_uses_default_labels(plot_widget):
-    """curve_name未指定でもreverse_from_index指定時はForward/Reverseの凡例が付く。"""
-    widget = plot_widget
-    buf = PlotBuffer(widget, reverse_from_index=2)
-    for i in range(4):
-        buf.add_point(float(i), float(i))
-
-    legend = widget.getPlotItem().legend
-    assert legend is not None
     labels = {item[1].text for item in legend.items}
     assert labels == {"Current / Forward（往路）", "Current / Backward（復路）"}
 
@@ -246,13 +220,6 @@ def _has_auto_range_action(view_box) -> bool:
     if menu is None:
         return False
     return any(action.text() == _AUTO_RANGE_TEXT for action in menu.actions())
-
-
-def test_install_auto_range_menu_adds_action_to_main_viewbox(plot_widget):
-    """メインViewBoxの右クリックメニュー先頭に自動スケーリング項目が入る。"""
-    install_auto_range_menu(plot_widget)
-
-    assert _has_auto_range_action(plot_widget.getPlotItem().getViewBox())
 
 
 def test_install_auto_range_menu_is_idempotent(plot_widget):

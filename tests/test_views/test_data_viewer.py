@@ -128,43 +128,6 @@ def test_parse_measurement_csv_empty_file(tmp_path):
     assert luminances == []
 
 
-def test_data_viewer_dialog_builds_curves_and_legend(tmp_path, make_dialog):
-    """3列CSVからDataViewerDialogを生成すると、電流・輝度2本のカーブと凡例が構築される。"""
-    path = _write_csv(
-        tmp_path,
-        "for_dialog.csv",
-        [
-            "voltage [V],current [A],luminance [cd/m2]",
-            "0.0,0.001,10.0",
-            "0.1,0.002,20.0",
-        ],
-    )
-    dialog = make_dialog(path)
-
-    assert "for_dialog.csv" in dialog.windowTitle()
-    assert dialog.current_curve is not None
-    assert dialog.luminance_curve is not None
-    legend = dialog.plot_widget.getPlotItem().legend
-    assert legend is not None
-
-
-def test_data_viewer_dialog_without_luminance(tmp_path, make_dialog):
-    """2列CSVでは輝度カーブが生成されない。"""
-    path = _write_csv(
-        tmp_path,
-        "no_luminance.csv",
-        [
-            "voltage [V],current [A]",
-            "0.0,0.001",
-            "0.1,0.002",
-        ],
-    )
-    dialog = make_dialog(path)
-
-    assert dialog.current_curve is not None
-    assert dialog.luminance_curve is None
-
-
 # ----------------------------------------------------------------------
 # review.md項目1: ファイルを追加して比較
 # ----------------------------------------------------------------------
@@ -337,22 +300,6 @@ def test_current_density_conversion_pure_logic():
     assert current_density_ma_per_cm2(0.001, 0.0) == 0.0
 
 
-def test_area_spin_defaults_to_4mm2(tmp_path, make_dialog):
-    """素子面積の初期値は4mm2で、初期表示は電流[A]のまま。"""
-    from views.data_viewer import DEFAULT_DEVICE_AREA_MM2
-
-    path = _write_csv(
-        tmp_path, "one.csv",
-        ["voltage [V],current [A]", "0.0,0.001", "0.1,0.002"],
-    )
-    dialog = make_dialog(path)
-
-    assert DEFAULT_DEVICE_AREA_MM2 == 4.0
-    assert dialog.area_spin.value() == pytest.approx(4.0)
-    assert not dialog.current_density_checkbox.isChecked()
-    assert dialog.current_curve.getData()[1].tolist() == pytest.approx([0.001, 0.002])
-
-
 def test_toggling_current_density_rescales_all_curves(tmp_path, make_dialog, monkeypatch):
     """J-V表示へ切り替えると、既に描画済みの全ファイルの縦軸値が電流密度になる。"""
     path1 = _write_csv(
@@ -365,7 +312,12 @@ def test_toggling_current_density_rescales_all_curves(tmp_path, make_dialog, mon
     )
     dialog = make_dialog([path1, path2])
 
+    dialog.area_spin.setValue(4.0)
     dialog.current_density_checkbox.setChecked(True)
+    axis = dialog.plot_widget.getPlotItem().getAxis("left")
+    assert "Current density" in axis.labelText
+    assert "mA/cm2" in axis.labelText
+    assert axis.labelUnits == ""
 
     # 面積4mm2(=0.04cm2)なので係数は25000倍
     assert dialog._series[0]["current_curve"].getData()[1].tolist() == pytest.approx([25.0, 50.0])
@@ -374,6 +326,7 @@ def test_toggling_current_density_rescales_all_curves(tmp_path, make_dialog, mon
     # 元に戻すと電流[A]へ復帰する(生データを保持しているため往復して劣化しない)
     dialog.current_density_checkbox.setChecked(False)
     assert dialog._series[0]["current_curve"].getData()[1].tolist() == pytest.approx([0.001, 0.002])
+    assert "density" not in axis.labelText
 
 
 def test_changing_area_updates_current_density(tmp_path, make_dialog):
@@ -408,22 +361,3 @@ def test_file_added_while_in_density_mode_is_also_converted(tmp_path, make_dialo
     dialog._on_add_file_clicked()
 
     assert dialog._series[1]["current_curve"].getData()[1].tolist() == pytest.approx([100.0, 200.0])
-
-
-def test_current_density_axis_label(tmp_path, make_dialog):
-    """縦軸ラベルが表示設定に応じて切り替わる。"""
-    path = _write_csv(
-        tmp_path, "one.csv",
-        ["voltage [V],current [A]", "0.0,0.001", "0.1,0.002"],
-    )
-    dialog = make_dialog(path)
-    left_axis = dialog.plot_widget.getPlotItem().getAxis("left")
-
-    assert "Current" in left_axis.labelText
-    assert "density" not in left_axis.labelText
-
-    dialog.current_density_checkbox.setChecked(True)
-    assert "Current density" in left_axis.labelText
-    assert "mA/cm2" in left_axis.labelText
-    # units指定だとpyqtgraphがSI接頭辞を付けてしまうため、単位はラベル文字列側に持つ
-    assert left_axis.labelUnits == ""

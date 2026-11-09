@@ -35,6 +35,7 @@ def test_menu_bar_has_new_three_menu_structure(qtbot, monkeypatch, tmp_path):
     assert window.actionDeviceSettings.objectName() == "actionDeviceSettings"
     assert window.actionDeviceSettings.text() == "測定の設定...(&M)"
     assert window.actionDisplaySettings.text() == "表示の設定...(&D)"
+    assert window.actionAlarmSettings in menu_bar.actions()[1].menu().actions()
 
     window.close()
 

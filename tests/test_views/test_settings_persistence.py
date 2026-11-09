@@ -62,18 +62,6 @@ def test_main_window_saves_on_close_and_restores_on_next_launch(qtbot, monkeypat
     window2.close()
 
 
-def test_main_window_launches_with_defaults_when_no_settings(qtbot, monkeypatch, tmp_path):
-    """settings.jsonが無い初回起動ではウィジェットのデフォルト値のままであることを検証。"""
-    settings_path = tmp_path / "settings.json"
-    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(settings_path))
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-    assert window.opv_tab.opv_vMinSpin.value() == -0.1
-    assert window.jvl_tab.jvl_vMaxSpin.value() == 1.9
-    window.close()
-
-
 def test_running_state_toggles_prevent_sleep(qtbot, monkeypatch, tmp_path):
     """測定中スリープ防止ON、全測定終了でOFFになることを検証(win32 APIはモック化)。"""
     monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))

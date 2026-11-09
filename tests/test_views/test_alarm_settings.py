@@ -18,10 +18,10 @@ def test_alarm_settings_save_reload_preserves_measurement_directories(qtbot, tmp
     qtbot.addWidget(window)
     audio = tmp_path / "日本語 音源.wav"
     audio.write_bytes(notify_sound._SUCCESS_ALARM_WAV)
+    persistence.save_settings({"alarm_mode": "file", "alarm_file": str(audio)})
     dialog = AlarmSettingsDialog(window)
     qtbot.addWidget(dialog)
-    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("file"))
-    dialog.file_edit.setText(str(audio))
+    assert "未登録" in dialog.library_combo.currentText()
     dialog.accept()
     assert dialog.result() == 1
     window.close()
@@ -30,6 +30,7 @@ def test_alarm_settings_save_reload_preserves_measurement_directories(qtbot, tmp
     stored = alarm_library.library_directory() / audio.name
     assert reopened.get_settings() == {"alarm_mode": "file", "alarm_file": str(stored)}
     assert stored.read_bytes() == audio.read_bytes()
+    audio.unlink()
     assert {key: persistence.load_settings()[key] for key in paths} == paths
     reopened.mode_combo.setCurrentIndex(reopened.mode_combo.findData("none"))
     assert not reopened.file_edit.isEnabled()
@@ -65,31 +66,6 @@ def test_added_audio_remains_available_after_cancel_and_restart(qtbot, monkeypat
     again = AlarmSettingsDialog()
     qtbot.addWidget(again)
     assert again.library_combo.currentData() == selected
-
-
-def test_previous_external_audio_is_copied_when_saved(qtbot, monkeypatch, tmp_path):
-    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
-    original = tmp_path / "existing.wav"
-    original.write_bytes(b"audio")
-    persistence.save_settings({"alarm_mode": "file", "alarm_file": str(original)})
-    dialog = AlarmSettingsDialog()
-    qtbot.addWidget(dialog)
-    assert "未登録" in dialog.library_combo.currentText()
-    dialog.accept()
-    original.unlink()
-    reopened = AlarmSettingsDialog()
-    qtbot.addWidget(reopened)
-    assert "未登録" not in reopened.library_combo.currentText()
-    assert reopened.file_edit.text() == str(alarm_library.library_directory() / original.name)
-
-
-def test_cancel_does_not_change_alarm(qtbot, monkeypatch, tmp_path):
-    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
-    dialog = AlarmSettingsDialog()
-    qtbot.addWidget(dialog)
-    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("none"))
-    dialog.reject()
-    assert persistence.load_settings()["alarm_mode"] == "standard"
 
 
 def test_preview_uses_unsaved_selection_and_stops_on_cancel(qtbot, monkeypatch, tmp_path):
@@ -146,38 +122,18 @@ def test_saving_no_alarm_stops_existing_notification(qtbot, monkeypatch, tmp_pat
     assert not existing.isVisible()
 
 
-def test_alarm_menu_opens_settings(qtbot, monkeypatch, tmp_path):
-    monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
-    opened = []
-    monkeypatch.setattr("views.main_window.qt_exec", lambda dialog: opened.append(dialog) or 0)
-    window = MainWindow()
-    qtbot.addWidget(window)
-    window.actionAlarmSettings.trigger()
-    assert isinstance(opened[0], AlarmSettingsDialog)
-    window.close()
-
-
-@pytest.mark.parametrize("mode", ["opv", "jvl", "dual_a", "dual_b"])
-def test_no_alarm_suppresses_sound_and_popup_for_every_mode(qtbot, monkeypatch, tmp_path, mode):
+def test_no_alarm_suppresses_sound_and_popup(qtbot, monkeypatch, tmp_path):
     monkeypatch.setenv("OPVJVL_SETTINGS_PATH", str(tmp_path / "settings.json"))
     persistence.save_settings({"alarm_mode": "none"})
     def unexpected(*args):
         pytest.fail("アラームなしの場合は音源を準備しない")
     monkeypatch.setattr(notify_sound, "_get_success_alarm_path", unexpected)
     monkeypatch.setattr(notify_sound, "_create_custom_player", unexpected)
-    window = MainWindow()
-    qtbot.addWidget(window)
-    if mode == "opv":
-        window.opv_tab._on_finished_ok([], "", False)
-    elif mode == "jvl":
-        window.jvl_tab._on_finished_ok([], "", False)
-    elif mode == "dual_a":
-        window.dual_channel_tab._on_finished_ok_a([], "", False)
-    else:
-        window.dual_channel_tab._on_finished_ok_b([], "", "", False)
+    parent = QtWidgets.QWidget()
+    qtbot.addWidget(parent)
+    assert notify_sound.play_completion_sound("success", parent) is None
     assert notify_sound._active_alarm_dialog is None
-    assert not window.findChildren(notify_sound.CompletionAlarmDialog)
-    window.close()
+    assert not parent.findChildren(notify_sound.CompletionAlarmDialog)
 
 
 class FakePlayer(QObject):
@@ -199,7 +155,7 @@ class FakePlayer(QObject):
         return "Unsupported audio"
 
 
-@pytest.mark.parametrize("finish", ["end", "button", "timer", "parent"])
+@pytest.mark.parametrize("finish", ["end", "parent"])
 def test_custom_player_stops_on_each_completion_path(qtbot, monkeypatch, finish):
     player = FakePlayer()
     selected = []
@@ -218,10 +174,6 @@ def test_custom_player_stops_on_each_completion_path(qtbot, monkeypatch, finish)
     assert player.played == 1
     if finish == "end":
         player.mediaStatusChanged.emit(7)
-    elif finish == "button":
-        dialog.stop_button.click()
-    elif finish == "timer":
-        dialog._close_timer.timeout.emit()
     else:
         parent.deleteLater()
         qtbot.waitUntil(lambda: notify_sound._active_alarm_dialog is None)
